@@ -1,0 +1,5 @@
+# Secrets: never commit env files, in any folder.
+# Keep a .env.example (no real values) next to the code that reads it.
+.env
+.env.*
+!.env.example
