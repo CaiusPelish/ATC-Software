@@ -297,13 +297,13 @@ export function useDrowsinessMonitor() {
 
   useEffect(() => {
     if (!monitoring || !alarming || !soundEnabled) {
-      stopVoiceAlert();
       return;
     }
 
+    if (voiceRequestRef.current || voiceSourceRef.current) return;
+
     const controller = new AbortController();
     voiceRequestRef.current = controller;
-    let active = true;
 
     async function playVoiceAlert() {
       try {
@@ -322,12 +322,13 @@ export function useDrowsinessMonitor() {
         const audioBuffer = await audioContext.decodeAudioData(
           await response.arrayBuffer(),
         );
-        if (!active) return;
+        if (controller.signal.aborted) return;
 
         const source = audioContext.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(audioContext.destination);
         voiceSourceRef.current = source;
+        voiceRequestRef.current = null;
         source.addEventListener(
           "ended",
           () => {
@@ -343,19 +344,15 @@ export function useDrowsinessMonitor() {
             ? caught.message
             : "The ElevenLabs voice alert could not be played.",
         );
+      } finally {
+        if (voiceRequestRef.current === controller) {
+          voiceRequestRef.current = null;
+        }
       }
     }
 
     void playVoiceAlert();
-    return () => {
-      active = false;
-      controller.abort();
-      if (voiceSourceRef.current) {
-        voiceSourceRef.current.stop();
-        voiceSourceRef.current = null;
-      }
-    };
-  }, [alarming, monitoring, soundEnabled, stopVoiceAlert]);
+  }, [alarming, monitoring, soundEnabled]);
 
   return {
     videoRef,

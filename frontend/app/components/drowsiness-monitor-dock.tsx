@@ -139,11 +139,11 @@ export function DrowsinessMonitorDock() {
         <p className="sim-monitor-audio-note">
           <Eye size={13} aria-hidden="true" />
           {soundEnabled
-            ? "Beep repeats during an alarm; ElevenLabs speaks when drowsiness is detected."
-            : "Drowsiness sound alerts are muted."}
+            ? "Beeps repeat during an alarm; ElevenLabs gives a voice warning when drowsiness is detected."
+            : "Beeps are muted. A voice warning already in progress will finish."}
         </p>
 
-        <p className="sim-monitor-disclaimer">
+        <p className="sim-monitor-audio-note">
           <Info size={14} aria-hidden="true" />
           <span>
             Experimental aid, not safety-critical. Accuracy depends on good

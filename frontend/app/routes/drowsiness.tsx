@@ -188,7 +188,7 @@ export default function DrowsinessMonitorPage() {
                 </div>
                 <div className={`sound-notice ${soundError ? "sound-notice-error" : ""}`}>
                   {soundError ? <VolumeX size={15} /> : soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
-                  <span>{soundError ?? (soundEnabled ? "Two-tone beep repeats every 5 seconds; ElevenLabs speaks when drowsiness is first detected." : "Sound and voice alerts are muted.")}</span>
+                  <span>{soundError ?? (soundEnabled ? "Two-tone beep repeats every 5 seconds; ElevenLabs gives a voice warning when drowsiness is detected." : "Beeps are muted. A voice warning already in progress will finish.")}</span>
                 </div>
                 {error && (
                   <p role="alert" className="drowsy-error">

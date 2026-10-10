@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { getElevenLabsCredentials } from "~/lib/elevenlabs.server";
 
 const warningText =
-  "You are showing signs of drowsiness. Please wake up, refocus, and take a safe break as soon as you can.";
+  "Drowsiness detected. Please wake up and refocus.";
 
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method !== "POST") {

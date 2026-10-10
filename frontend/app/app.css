@@ -1349,22 +1349,6 @@
   color: oklch(0.75 0.08 225);
 }
 
-.sim-monitor-disclaimer {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin: 9px 2px 0;
-  color: oklch(0.78 0.025 250);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.sim-monitor-disclaimer svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-  color: oklch(0.82 0.13 85);
-}
-
 @media (max-width: 600px) {
   .sim-monitor-dock {
     right: auto;
