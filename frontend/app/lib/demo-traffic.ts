@@ -1,16 +1,13 @@
 // Fake traffic on the real EWR taxiway graph, used when the backend is offline or its
 // node ids aren't on the map yet. Emits the same SimulationState shape as GET /api/state,
 // so the vehicle layer can't tell demo from live data.
-import { chart, type Point } from "~/lib/chart";
+import { chart, edgeLine, lineLength, routeLine, routePoint, type Point } from "~/lib/chart";
 import type { SimulationState } from "~/lib/sim-state";
 
-const dist = (a: string, b: string) => {
-  const [ax, ay] = chart.positions[a];
-  const [bx, by] = chart.positions[b];
-  return Math.hypot(bx - ax, by - ay);
-};
+// Edge cost = length of the real curve, so demo routes match what's drawn.
+const dist = (a: string, b: string) => lineLength(edgeLine(a, b));
 
-/** Shortest path by straight-line distance. Small graph, so a plain array queue is fine. */
+/** Shortest path by taxiway curve length. Small graph, so a plain array queue is fine. */
 function shortestPath(start: string, goal: string): string[] {
   const best = new Map([[start, 0]]);
   const prev = new Map<string, string>();
@@ -38,7 +35,7 @@ function shortestPath(start: string, goal: string): string[] {
   return path;
 }
 
-const routeLength = (route: string[]) => route.slice(1).reduce((sum, id, i) => sum + dist(route[i], id), 0);
+const routeLength = (route: string[]) => lineLength(routeLine(route));
 
 // Start/goal node ids picked on the real graph (see scripts/build_chart.py output).
 const DEMO = [
@@ -65,18 +62,8 @@ function distanceToSegment([px, py]: Point, [ax, ay]: Point, [bx, by]: Point) {
 }
 
 function pointAt(route: string[], progress: number): Point {
-  let remaining = progress * routeLength(route);
-  for (let i = 0; i < route.length - 1; i++) {
-    const seg = dist(route[i], route[i + 1]);
-    if (remaining <= seg) {
-      const [ax, ay] = chart.positions[route[i]];
-      const [bx, by] = chart.positions[route[i + 1]];
-      const t = seg ? remaining / seg : 0;
-      return [ax + (bx - ax) * t, ay + (by - ay) * t];
-    }
-    remaining -= seg;
-  }
-  return chart.positions[route[route.length - 1]];
+  const p = routePoint(route, progress);
+  return p ? [p.x, p.y] : chart.positions[route[0]];
 }
 
 const wrap = (p: number) => (p >= 1 ? 0 : p);

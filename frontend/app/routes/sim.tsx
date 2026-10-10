@@ -17,6 +17,7 @@ export function meta({}: Route.MetaArgs) {
 const legend = [
   { label: "Runway", swatch: <span className="h-1.5 w-5 rounded-sm bg-runway/60" /> },
   { label: "Taxiway", swatch: <span className="h-0.5 w-5 bg-taxiway" /> },
+  { label: "Runway crossing", swatch: <span className="size-2.5 rounded-full bg-destructive" /> },
   { label: "Hold-short point (zoom in)", swatch: <span className="size-2.5 rounded-full bg-taxiway" /> },
   { label: "Intersection (zoom in more)", swatch: <span className="size-2 rounded-full bg-foreground" /> },
   { label: "Aircraft · taxiing", swatch: <span className="size-2.5 rotate-45 bg-beacon" /> },
