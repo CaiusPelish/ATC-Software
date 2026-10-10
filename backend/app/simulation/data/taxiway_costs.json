@@ -1,0 +1,12 @@
+{
+  "segments": {
+    "T1_T2": {
+      "average_taxi_seconds": 42,
+      "congestion_factor": 1.2
+    },
+    "T2_T3": {
+      "average_taxi_seconds": 65,
+      "congestion_factor": 1.5
+    }
+  }
+}
