@@ -42,5 +42,9 @@ ELEVENLABS_VOICE_ID=your_voice_id
 The frontend server proxies a fixed warning message to ElevenLabs, keeping the
 API key out of the browser. Without these variables, the monitor displays a
 configuration message and still plays the browser-generated beeps.
+The same live monitor and alert behavior is available in the corner dock on
+the `/sim` page. For local development, the frontend server loads these values
+from `frontend/.env`; restart `npm run dev` after changing them. Provider errors
+are logged by the frontend server without logging the API key.
 
 Build the production app with `npm run build`.
