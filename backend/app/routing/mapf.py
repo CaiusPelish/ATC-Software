@@ -56,7 +56,7 @@ class BatchResult:
 
 
 def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, edge_allowed_for=None,
-               order=None, max_delay_retries=6, hold_starts=0):
+               order=None, max_delay_retries=6, hold_starts=0, on_planned=None):
     """Plan every request; returns a BatchResult. Mutates `reservations` if given.
 
     order(airport, requests) -> [aircraft ids] picks who goes first; defaults
@@ -68,6 +68,9 @@ def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, edge_
     ready time before anyone is planned. Without it, an aircraft planned late
     can find its own starting spot taken by someone planned earlier, which
     matters when planning order isn't arrival order (e.g. by takeoff slot).
+
+    on_planned(request, path) is called after each aircraft is planned, before
+    the next one, e.g. to close the runways it uses (RunwayGate.claim).
     """
     reservations = reservations if reservations is not None else ReservationTable()
     by_id = {r.id: r for r in requests}
@@ -96,6 +99,8 @@ def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, edge_
             if r.hold_until is not None:
                 ideal = max(ideal, r.hold_until)
             result.delays[aid] = planned.path[-1][1] - ideal
+            if on_planned:
+                on_planned(r, planned.path)
         else:
             result.failures[aid] = planned.reason
     return result

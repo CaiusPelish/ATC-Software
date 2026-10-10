@@ -18,6 +18,7 @@ piecewise-linear (seconds, meters along the route) curve that progress is
 read from.
 """
 
+import copy
 import functools
 import heapq
 import math
@@ -60,8 +61,18 @@ TAKEOFF_ROLL_S = 40
 MAX_LINEUP_WAIT_S = 300
 # Finished aircraft stay in state this long, so the frontend sees "arrived" before they vanish.
 ARRIVED_LINGER_S = 8
+# Delay-and-retry rounds for a replan forced on someone by a hold; a failed plan is costly.
+REPAIR_RETRIES = 2
 # Faster than taxiing: on a landing or takeoff roll, where the aircraft can't be stopped.
 ROLL_SPEED_MS = 1.5 * TAXI_SPEED
+
+
+class NoRoute(ValueError):
+    """No route right now; blockers are the aircraft in the way, when known."""
+
+    def __init__(self, message, blockers=()):
+        super().__init__(message)
+        self.blockers = set(blockers)
 
 
 class Track:
@@ -202,11 +213,20 @@ class LiveSim:
         self.leaves = {}       # aircraft id -> True if it leaves the map at its destination
         self.departs = {}      # aircraft id -> runway pair it takes off from
         self.rollout_until = {}  # arrival id -> seconds when it is off its landing roll
+        self.exit_d = {}       # arrival id -> meters along its route to the exit it rolls out to
         self.finished_at = {}  # aircraft id -> seconds when it arrived
         self.pending = []      # [(appear_s, n, Aircraft)]: arrivals not on the runway yet
         self.callsigns = set()
         self.next_spawn_s = FIRST_SPAWN_S
         self.next_is_arrival = True
+        # Replan other aircraft when a hold blocks their plan (off only to measure what it buys).
+        self.repair_holds = True
+        self.repairs = 0        # plans changed by hold repair
+        self.knock_on_holds = 0  # aircraft held because no replan could avoid a hold
+        self.auto_held = set()   # those aircraft; they resume by themselves once a route opens up
+        self.swaps = 0           # deadlocks broken by planning one aircraft through another's spot
+        self.unrouted = set()    # spawned for auto-routing but no route yet; retried every step
+        self.next_resume_step = 0
 
         self.ramps = self.ap.hold_shorts("movement")
         # Departures line up at the exit nearest the threshold.
@@ -221,7 +241,11 @@ class LiveSim:
         return math.floor(self.now / DT)
 
     def aircraft(self, aid):
+        """An aircraft in state, or an arrival still on final (pending)."""
         for a in self.state.aircraft:
+            if a.id == aid:
+                return a
+        for _, _, a in self.pending:
             if a.id == aid:
                 return a
         raise KeyError(aid)
@@ -242,6 +266,10 @@ class LiveSim:
 
         while self.pending and self.pending[0][0] <= t:
             self.state.aircraft.append(heapq.heappop(self.pending)[2])
+
+        if (self.auto_held or self.unrouted) and self.step >= self.next_resume_step:
+            self.next_resume_step = self.step + 1
+            self._retry_stalled()
 
         for a in self.state.aircraft:
             self._update_aircraft(a, t)
@@ -282,10 +310,9 @@ class LiveSim:
             return
         self.state.aircraft = [a for a in self.state.aircraft if a.id not in gone]
         for aid in gone:
-            if aid in self.res:
-                self.res.remove_path(aid)
+            self._unreserve(aid)
             for d in (self.tracks, self.weight, self.routed, self.leaves, self.departs,
-                      self.rollout_until, self.finished_at):
+                      self.rollout_until, self.exit_d, self.finished_at):
                 d.pop(aid, None)
         # Runway windows that are over can't matter any more.
         for pair, windows in self.gate.windows.items():
@@ -321,7 +348,7 @@ class LiveSim:
         self.weight[aid] = weight
         self.callsigns.add(callsign)
         self.tracks[aid] = Track([node], [(self.now, 0.0)])
-        self.res.add_path(aid, [(node, self.step)], park_at_goal=True)
+        self._reserve(aid, [(node, self.step)], park_at_goal=True)
         self.state.aircraft.append(a)
         return a
 
@@ -336,7 +363,7 @@ class LiveSim:
             try:
                 self.route(aid, a.destination)
             except ValueError:
-                pass  # no route right now; it waits for the controller
+                self.unrouted.add(aid)  # retried until a route opens up
         return a
 
     def spawn_arrival(self, *, touchdown_s=None, ramp=None, force=False):
@@ -374,17 +401,18 @@ class LiveSim:
         self.rollout_until[aid] = w1 * DT
         tr = Track(rollout, [(appear, 0.0), (td, TOUCHDOWN_M)])
         tr.points.append((w1 * DT, tr.length))
+        self.exit_d[aid] = tr.length
         self.tracks[aid] = tr
-        self.res.add_path(aid, [(exit_node, w1)], park_at_goal=True)
+        self._reserve(aid, [(exit_node, w1)], park_at_goal=True)
 
         ramps = [r for r in self.ramps if self.res.parked_by(r) is None] or self.ramps
         a = Aircraft(id=aid, callsign=callsign, aircraft_type=ac_type, position=rollout[0],
                      destination=ramp or self.rng.choice(ramps), route=tr.route, status="taxiing")
         if self.auto_route:
             try:
-                self._plan_and_commit(a, a.destination, tr, from_d=tr.length)
+                self._plan_and_commit(a, a.destination, tr)
             except ValueError:
-                pass  # it stops at the exit and waits for the controller
+                self.unrouted.add(aid)  # it stops at the exit until a route opens up
         heapq.heappush(self.pending, (appear, id(a), a))
         return a
 
@@ -397,6 +425,58 @@ class LiveSim:
         v = Vehicle(id=vid, position=route[0], route=list(route), speed=speed)
         self.state.vehicles.append(v)
         return v
+
+    # ---- reservations ----------------------------------------------------
+
+    @staticmethod
+    def _behind(aid):
+        """Id of the extra reservation for the node behind an aircraft held mid-edge."""
+        return f"{aid}@behind"
+
+    def _reserve(self, aid, path, park_at_goal, behind=None):
+        self._unreserve(aid)
+        self.res.add_path(aid, path, park_at_goal=park_at_goal)
+        if behind:
+            self.res.add_path(self._behind(aid), [behind], park_at_goal=True)
+
+    def _unreserve(self, aid):
+        for key in (aid, self._behind(aid)):
+            if key in self.res:
+                self.res.remove_path(key)
+
+    def _walled_off(self, aid, start, goal):
+        """Ids of who blocks every way from start to goal by parking (holding, waiting), or None.
+
+        Space-time A* only gives up after searching to its horizon, which takes
+        seconds; this answers the common hopeless case (a held aircraft on the
+        only way in) at once.
+        """
+        blockers = set()
+
+        def parked(node):
+            other = self.res.parked_by(node, ignore=aid)
+            if other:
+                blockers.add(other.split("@")[0])
+            return other
+
+        if parked(goal):
+            return blockers
+        seen, queue = {start}, deque([start])
+        while queue:
+            n = queue.popleft()
+            for m in self.ap.graph[n]:
+                if m == goal:
+                    return None
+                if m not in seen and not parked(m):
+                    seen.add(m)
+                    queue.append(m)
+        return blockers
+
+    def _callsign(self, aid):
+        try:
+            return self.aircraft(aid).callsign
+        except KeyError:
+            return aid
 
     # ---- runway use ------------------------------------------------------
 
@@ -435,24 +515,41 @@ class LiveSim:
         if a.status == "arrived" and self.leaves.get(aid):
             raise ValueError(f"{a.callsign} has already left")
         self._plan_and_commit(a, destination, self.tracks[aid])
+        self.auto_held.discard(aid)
         a.destination = destination
         if a.status in ("waiting", "arrived", "holding"):
             a.status = "taxiing"
         return a
 
     def hold(self, aid, hold):
+        """Stop aid where it is (hold=True), or replan it from there (hold=False).
+
+        Holding also replans every aircraft whose plan now runs into it; see repair().
+        """
         a = self.aircraft(aid)
-        t = self.now
+        self.auto_held.discard(aid)
         if not hold:
             if a.status != "holding":
                 return a
             if self.routed.get(aid):
-                self._plan_and_commit(a, a.destination, self.tracks[aid])  # stays holding if it fails
+                try:
+                    self._plan_and_commit(a, a.destination, self.tracks[aid])
+                except ValueError as exc:
+                    self.auto_held.add(aid)  # keeps holding, and goes as soon as it can
+                    raise ValueError(f"{exc} It will continue when the way is clear.") from exc
                 a.status = "taxiing"
             else:
                 a.status = "waiting"
             return a
 
+        self._stop(a)
+        if self.repair_holds:
+            self.repair(aid)
+        return a
+
+    def _stop(self, a):
+        """Freeze a where it is and reserve that spot until further notice."""
+        aid, t = a.id, self.now
         if a.status == "arrived":
             raise ValueError(f"{a.callsign} has already arrived")
         tr = self.tracks[aid]
@@ -465,15 +562,152 @@ class LiveSim:
         ahead = next((tr.route[k] for k in range(i, len(tr.route))
                       if tr.route[k] in planner and tr.cum[k] >= d - 1e-6), prev)
         prev = prev or ahead
-        path = [(prev, self.step)] if prev == ahead else [(prev, self.step), (ahead, self.step + 1)]
-        self.res.add_path(aid, path, park_at_goal=True)
+        # Stopped between two nodes: nobody may use either until it moves again.
+        self._reserve(aid, [(ahead, self.step)], park_at_goal=True,
+                      behind=(prev, self.step) if prev != ahead else None)
         self._clear_takeoff(aid)
         self.leaves[aid] = False
         self.tracks[aid] = Track(tr.route, [(t, d)])
         a.status, a.speed = "holding", 0.0
-        return a
 
-    def _plan_and_commit(self, a, destination, tr, from_d=0.0):
+    def blocked_by(self, aid):
+        """Other aircraft whose reserved path, from now on, runs into aid's reservation."""
+        mine = ReservationTable(self.res.node_buffer, self.res.follow_gap)
+        mine.add_path(aid, self.res.path(aid), park_at_goal=not self.leaves.get(aid))
+        if self._behind(aid) in self.res:
+            mine.add_path(self._behind(aid), self.res.path(self._behind(aid)))
+        hits = []
+        for other, path in self.res.paths().items():
+            if other == aid or "@" in other:
+                continue
+            for k, (node, t) in enumerate(path):
+                if t < self.step:
+                    continue
+                u, t0 = path[k - 1] if k else (node, t)
+                if mine.node_conflict(node, t, ignore=other) or (
+                        u != node and mine.edge_conflict(u, node, t0, t, ignore=other)):
+                    hits.append((t, other))
+                    break
+        return [other for _, other in sorted(hits)]
+
+    def repair(self, aid):
+        """Replan everyone whose plan runs into aid, soonest conflict first.
+
+        Each replan is against the current reservations, so it avoids aid and
+        everyone else. An aircraft that can't be replanned (it is already
+        committed to the blocked node) holds where it is instead, and its own
+        hold is repaired in turn. Aircraft on a landing or takeoff roll can't
+        stop; if one of those is blocked the conflict stays and is reported.
+        """
+        queue, held = deque([aid]), {aid}
+        while queue:
+            cause = queue.popleft()
+            for other in self.blocked_by(cause):
+                a = self.aircraft(other)
+                if a.status == "holding" or not self.routed.get(other):
+                    continue  # nothing planned to change
+                try:
+                    self._plan_and_commit(a, a.destination, self.tracks[other], retries=REPAIR_RETRIES)
+                    self.repairs += 1
+                    continue
+                except ValueError:
+                    pass
+                if other in held:
+                    continue
+                try:
+                    self._stop(a)
+                except ValueError:
+                    continue  # on a roll
+                self.knock_on_holds += 1
+                self.auto_held.add(other)
+                held.add(other)
+                queue.append(other)
+
+    def _retry_stalled(self):
+        """Try again to route aircraft the planner held or couldn't route automatically."""
+        for group, stalled_status in ((self.auto_held, "holding"), (self.unrouted, "waiting")):
+            for aid in sorted(group):
+                try:
+                    a = self.aircraft(aid)
+                except KeyError:
+                    group.discard(aid)
+                    continue
+                if self.routed.get(aid) if group is self.unrouted else a.status != stalled_status:
+                    group.discard(aid)  # the controller took over
+                    continue
+                try:
+                    self._plan_and_commit(a, a.destination, self.tracks[aid], retries=REPAIR_RETRIES)
+                except NoRoute as exc:
+                    if not self._swap_through(a, exc.blockers):
+                        continue
+                except ValueError:
+                    continue
+                if a.status in ("holding", "waiting"):
+                    a.status = "taxiing"
+                group.discard(aid)
+
+    def _swap_through(self, a, blockers):
+        """Plan a through stalled aircraft in its way, then replan them around it; all or nothing.
+
+        Two aircraft stopped facing each other on one taxiway each wait for
+        the other forever. Lifting the blockers' reservations lets a's plan
+        pass where they stand; their replans against it then have to get out
+        of the way in time (into a side taxiway, say), or nothing changes.
+        Only aircraft the planner stopped or couldn't route are moved this
+        way, never one the controller is holding.
+        """
+        movable = [b for b in blockers if b in self.auto_held or b in self.unrouted]
+        if not movable or len(movable) < len(blockers):
+            return False
+        saved = self._snapshot()
+        try:
+            for b in movable:
+                self._unreserve(b)
+            self._plan_and_commit(a, a.destination, self.tracks[a.id], retries=REPAIR_RETRIES)
+            for b in movable:
+                other = self.aircraft(b)
+                self._plan_and_commit(other, other.destination, self.tracks[b], retries=REPAIR_RETRIES)
+                other.status = "taxiing"
+                self.auto_held.discard(b)
+                self.unrouted.discard(b)
+        except ValueError:
+            self._restore(saved)
+            return False
+        self.swaps += 1
+        return True
+
+    def _snapshot(self):
+        everyone = self.state.aircraft + [p[2] for p in self.pending]
+        return dict(
+            res=copy.deepcopy(self.res), tracks=dict(self.tracks), routed=dict(self.routed),
+            leaves=dict(self.leaves), departs=dict(self.departs),
+            windows={k: list(v) for k, v in self.gate.windows.items()},
+            auto_held=set(self.auto_held), unrouted=set(self.unrouted),
+            aircraft={a.id: (a, a.status, a.route, a.destination) for a in everyone},
+        )
+
+    def _restore(self, saved):
+        self.res, self.tracks, self.routed = saved["res"], saved["tracks"], saved["routed"]
+        self.leaves, self.departs = saved["leaves"], saved["departs"]
+        self.gate.windows = saved["windows"]
+        self.auto_held, self.unrouted = saved["auto_held"], saved["unrouted"]
+        for a, status, route, destination in saved["aircraft"].values():
+            a.status, a.route, a.destination = status, route, destination
+
+    def _plan_and_commit(self, a, destination, tr, from_d=0.0, retries=6):
+        # A held aircraft's reservation behind it is its own; it mustn't block its replan.
+        behind = self._behind(a.id)
+        kept = self.res.path(behind) if behind in self.res else None
+        if kept:
+            self.res.remove_path(behind)
+        try:
+            return self._plan_and_commit_inner(a, destination, tr, from_d, retries)
+        except ValueError:
+            if kept and behind not in self.res:
+                self.res.add_path(behind, kept, park_at_goal=True)
+            raise
+
+    def _plan_and_commit_inner(self, a, destination, tr, from_d, retries):
         """Replace a's route with a plan to destination, continuing from where it is on tr.
 
         The plan starts at the first planner node at least from_d meters along
@@ -482,6 +716,8 @@ class LiveSim:
         aid, t = a.id, self.now
         goal, runway = self.destination_goal(destination)
         planner = self.ap.graph
+        if t < self.rollout_until.get(aid, -1):
+            from_d = max(from_d, self.exit_d[aid])  # it can't turn off before its exit
 
         # The plan starts at the next planner node ahead; until then the aircraft keeps going.
         d = tr.dist(t)
@@ -510,18 +746,24 @@ class LiveSim:
             return AircraftRequest(aid, start, goal, ready_t=t_start, weight_class=self.weight[aid],
                                    callsign=a.callsign, goal_hold=hold, hold_until=hold_until)
 
-        planned = plan_one(self.ap, request(), self.res, edge_allowed=allowed)
+        blockers = self._walled_off(aid, start, goal)
+        if blockers is not None:
+            names = ", ".join(sorted(self._callsign(b) for b in blockers)) or "traffic"
+            raise NoRoute(f"{a.callsign} can't get to {destination}: {names} in the way", blockers)
+        planned = plan_one(self.ap, request(), self.res, edge_allowed=allowed, max_delay_retries=retries)
         if not planned.ok:
-            raise ValueError(planned.reason)
+            other = planned.blocking.other_id.split("@")[0] if planned.blocking else None
+            raise NoRoute(planned.reason, [other] if other else [])
         if runway:
             # Line up and wait until nobody else is on the runway for the whole roll.
             first_end = planned.path[-1][1]
-            extra = 0
+            extra = 1
             while self.runway_busy(pair, planned.path[-1][1] - hold, planned.path[-1][1], ignore=aid):
-                extra += 2
+                extra *= 2  # each try is a full plan, so back off fast
                 if extra * DT > MAX_LINEUP_WAIT_S:
                     raise ValueError(f"Runway {runway} won't be clear for {a.callsign}'s takeoff")
-                retry = plan_one(self.ap, request(first_end + extra), self.res, edge_allowed=allowed)
+                retry = plan_one(self.ap, request(first_end + extra), self.res, edge_allowed=allowed,
+                                 max_delay_retries=retries)
                 if retry.ok:
                     planned = retry
 
@@ -546,7 +788,10 @@ class LiveSim:
             points = [p for p in points if p[0] <= (end - hold) * DT] + [(end * DT, new.length)]
         new.points = [p for p in points if p[0] >= t] or [(t, d)]
 
-        self.res.add_path(aid, path, park_at_goal=hold is None)
+        # Until the plan takes over at `start`, the aircraft is still on its old path.
+        old = self.res.path(aid) if aid in self.res else []
+        driving = [step for step in old if self.step - 1 <= step[1] < t_start]
+        self._reserve(aid, driving + path, park_at_goal=hold is None)
         self._clear_takeoff(aid)
         if runway:
             self.gate.add_window(pair, path[-1][1] - hold, path[-1][1], aid, kind="takeoff")

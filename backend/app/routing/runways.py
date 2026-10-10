@@ -243,6 +243,40 @@ class RunwayGate:
         clear = max(ap.steps[v].values()) if any(v in self.on[p] for p in pairs) else 0
         return not any(self.busy(pair, t, t + d + clear, aid, departs_from) for pair in pairs)
 
+    def occupancy(self, path):
+        """[(pair, t0, t1)]: steps [t0, t1) the path is on each runway, crossing, lining up or rolling out."""
+        spans = []
+        for (u, t0), (v, t1) in zip(path, path[1:]):
+            for pair in set(self.runways_touched(u, v)) | {p for p, nodes in self.on.items() if u in nodes}:
+                if spans and spans[-1][0] == pair and spans[-1][2] >= t0:
+                    spans[-1] = (pair, spans[-1][1], max(spans[-1][2], t1))
+                else:
+                    spans.append((pair, t0, t1))
+        node, t = path[-1]
+        for pair, nodes in self.on.items():
+            if node in nodes:  # still on the runway when the path ends
+                spans.append((pair, t, t + 1))
+        return spans
+
+    def claim(self, aid, path, departs_from=None):
+        """Flag every runway the path uses as in use for those steps, so nobody planned later enters it.
+
+        On departs_from the window is a "takeoff" (lining up), which still lets
+        the next departure off that runway line up behind it, as busy() does
+        for real takeoffs; anywhere else it is a "crossing".
+        """
+        claimed = self.occupancy(path)
+        for pair, t0, t1 in claimed:
+            self.add_window(pair, t0, t1, aid, "takeoff" if pair == departs_from else "crossing")
+        return claimed
+
+    def in_use(self, pair, t):
+        """(label, kind) of the window holding the runway at step t, landings first, or None."""
+        found = [(w0, label, kind) for w0, w1, label, kind in self.windows[pair] if w0 <= t < w1]
+        rank = {"landing": 0, "takeoff": 1}
+        found.sort(key=lambda w: (rank.get(w[2], 2), w[0]))
+        return (found[0][1], found[0][2]) if found else None
+
     def __call__(self, u, v, t):
         return self.allowed(u, v, t)
 

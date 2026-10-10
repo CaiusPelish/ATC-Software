@@ -10,6 +10,7 @@ when first seen, then a takeoff roll before the recording ends.
 
 import math
 
+import numpy as np
 import pandas as pd
 
 from ..routing.airport import DT
@@ -81,6 +82,23 @@ def arrival_taxi_rows(flight):
     if len(taxi) < MIN_TAXI_SECONDS:
         raise NotEnoughHistory(f"has only {len(taxi)} s of taxi after landing (need {MIN_TAXI_SECONDS} s)")
     return taxi
+
+
+def segment_metrics(rows):
+    """(meters per step, seconds per step, stopped per step) along a real taxi."""
+    lat, lon = rows["Lat"].to_numpy(), rows["Lon"].to_numpy()
+    dist = np.array([haversine_m(lat[i], lon[i], lat[i + 1], lon[i + 1]) for i in range(len(rows) - 1)])
+    return dist, np.diff(rows["UnixTime"].to_numpy()), rows["Speed"].to_numpy()[:-1] <= STOPPED_SPEED
+
+
+def measured_taxi_speed(flights):
+    """Average real speed while moving, in m/s, over every flight's taxi."""
+    meters = seconds = 0.0
+    for f in flights:
+        dist, dt, stopped = segment_metrics(f["rows"])
+        meters += dist[~stopped].sum()
+        seconds += dt[~stopped].sum()
+    return meters / seconds
 
 
 def runway_number(flight):
