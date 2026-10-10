@@ -18,7 +18,6 @@ export function DrowsinessMonitorDock() {
   const [expanded, setExpanded] = useState(true);
   const {
     videoRef,
-    canvasRef,
     monitoring,
     result,
     error,
@@ -86,7 +85,6 @@ export function DrowsinessMonitorDock() {
               playsInline
               ref={videoRef}
             />
-            <canvas className="hidden" ref={canvasRef} />
             {!monitoring && <UserRound size={22} aria-hidden="true" />}
             {monitoring && <span className="sim-monitor-camera-dot" />}
           </div>
@@ -112,7 +110,7 @@ export function DrowsinessMonitorDock() {
             <strong>{(result?.closed_duration ?? 0).toFixed(1)}s</strong>
           </div>
           <div>
-            <span>PERCLOS · 15s</span>
+            <span>PERCLOS · 30s</span>
             <strong>{((result?.perclos ?? 0) * 100).toFixed(0)}%</strong>
           </div>
           <div>

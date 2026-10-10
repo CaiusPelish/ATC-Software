@@ -32,7 +32,6 @@ export function meta({}: Route.MetaArgs) {
 export default function DrowsinessMonitorPage() {
   const {
     videoRef,
-    canvasRef,
     monitoring,
     result,
     error,
@@ -98,7 +97,7 @@ export default function DrowsinessMonitorPage() {
             <span className="session-indicator" />
             <span>{monitoring ? (alarming ? "Attention needed" : "Monitoring live") : "Monitor ready"}</span>
           </div>
-          <p>The preview stays in your browser. Camera frames are sent to the connected detector for analysis and are not stored.</p>
+          <p>Face tracking runs in your browser. Camera frames never leave this device and are not stored.</p>
         </div>
 
         <div className="drowsy-grid">
@@ -124,7 +123,6 @@ export default function DrowsinessMonitorPage() {
                   playsInline
                   ref={videoRef}
                 />
-                <canvas className="hidden" ref={canvasRef} />
                 {!monitoring && (
                   <div className="camera-placeholder">
                     <div className="camera-placeholder-icon"><Camera size={27} /></div>
@@ -139,7 +137,7 @@ export default function DrowsinessMonitorPage() {
                       {statusLabel[status]}
                     </div>
                     <div className="camera-corners" aria-hidden="true"><i /><i /><i /><i /></div>
-                    <span className="camera-time">FRAME CHECK · 1S</span>
+                    <span className="camera-time">FACE TRACKING · LIVE</span>
                   </>
                 )}
               </div>
@@ -174,7 +172,7 @@ export default function DrowsinessMonitorPage() {
                     alert={alarming}
                   />
                   <Metric
-                    label="PERCLOS · 15 sec"
+                    label="PERCLOS · 30 sec"
                     value={`${((result?.perclos ?? 0) * 100).toFixed(0)}%`}
                     progress={(result?.perclos ?? 0) * 100}
                     alert={alarming}
@@ -206,7 +204,7 @@ export default function DrowsinessMonitorPage() {
               <CardContent className="interpretation-content">
                 <div><span className="interpretation-index">01</span><span>Eye closure patterns</span><Check size={14} /></div>
                 <div><span className="interpretation-index">02</span><span>Time spent with eyes closed</span><Check size={14} /></div>
-                <div><span className="interpretation-index">03</span><span>Changes over the last 15 sec</span><Check size={14} /></div>
+                <div><span className="interpretation-index">03</span><span>Changes over the last 30 sec</span><Check size={14} /></div>
               </CardContent>
             </Card>
           </aside>
@@ -216,12 +214,12 @@ export default function DrowsinessMonitorPage() {
           <div className="privacy-icon"><ShieldCheck size={17} /></div>
           <div className="privacy-copy">
             <strong>Your camera stays yours.</strong>
-            <span>Frames are checked by the connected backend and aren&apos;t saved. Only short-lived eye-state measurements are kept during this session.</span>
+            <span>Face tracking runs in your browser. Camera frames never leave this device; only the eye-state numbers are kept during this session.</span>
           </div>
           <div className="privacy-divider" />
           <div className="privacy-copy privacy-hint">
-            <strong>First run can take a moment.</strong>
-            <span>The detection model may download its weights the first time it sees a face.</span>
+            <strong>Calibrates in two seconds.</strong>
+            <span>Look at the screen with eyes open when you start, so the monitor learns your normal eye shape.</span>
           </div>
         </section>
 
