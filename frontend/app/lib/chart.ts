@@ -107,6 +107,8 @@ const nodeInfo = new Map(chart.nodes.map((n) => [n.id, n]));
  * (breadth-first) to the closest node that does. Falls back to the raw id.
  */
 export function placeName(id: string) {
+  // Runway ends from the backend graph ("rwy_22R") name themselves.
+  if (id.startsWith("rwy_")) return `runway ${id.slice(4)}`;
   const seen = new Set([id]);
   let frontier = [id];
   for (let depth = 0; depth < 25 && frontier.length; depth++) {

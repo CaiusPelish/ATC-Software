@@ -1,73 +1,68 @@
-# Backend → Frontend Hookup
+# Backend To-Do
 
-What the backend needs to change so `/sim` shows live traffic instead of demo traffic.
+What the backend still needs for the demo, in priority order. Work on the `backend` branch; Raul handles merging into `main`.
 
-## Where things stand
+## 1. Traffic visible right away
+On a fresh start the map stays empty for about 45 s, because arrivals only enter the state at touchdown. Fix one of these ways:
+- start `default` with 1–2 departures already waiting or taxiing, or
+- include arrivals on final in the state (for example `status: "landing"` with `position` = the runway end).
 
-- **Frontend:** `/sim` polls `GET /api/state` every 500 ms and draws planes and trucks on the real EWR map. The map is built from `KEWR_ground.json`: all 431 nodes, including runways and crossings. Vehicles follow each edge's `geometry` curve.
-- **Why it shows demo traffic:** the live API still uses the 7-node test graph (`GATE_A1`, `T1`, `RWY_4`), and nothing moves (`time` stays `0.0`, `running: false`).
-- **Planner:** Luftalagi's planner works standalone (arrivals sim: 6/6 to the ramp, 0 conflicts, 0 incursions; routing tests pass). It just isn't wired into the API yet.
-
-## What we need, in priority order
-
-### 1. Use the real graph in the API
-In `routing/graph.py`:
-
-```python
-airport_graph = json.load(open(".../KEWR_ground.json"))["graph"]
-```
-
-It's the same `{node: {neighbor: cost}}` shape, so A*, `/api/route` and the spawner pick it up automatically.
-
-> **Simple vs ground:** `KEWR_ground.json` is `KEWR_taxiway_graph_simple.json` plus the runway nodes, so every simple-graph ID is already on the map, and either file works. Use **ground**: the simple graph has no runway nodes, so planes can't land, cross a runway or line up, and the crash challenge needs all three. The old 1,462-node `KEWR_taxiway_graph.json` is not used by the frontend anymore.
-
-### 2. Real node IDs in state
-In `simulation/state.py` and `simulation/scenarios.py`, replace `GATE_A1`, `T1` and `RWY_4` with `KEWR_ground` IDs, e.g. `"rwy_4L"`, or ramp ends like `"45452380"`.
-The frontend switches to **Live** as soon as every `position` is a `KEWR_ground` ID.
-
-### 3. Tick loop
-On startup, run an asyncio task that calls `simulation_tick(state, 0.25)` every 250 ms and sets `running = True`.
-
-### 4. Endpoints so the controller can act
+## 2. Vehicle endpoints (crash challenge)
+The judge drags a fire truck across a runway. `LiveSim.add_vehicle` exists, but nothing exposes it:
 
 | Method | Path | Body | Effect |
 |---|---|---|---|
-| `POST` | `/api/aircraft/{id}/route` | `{"destination": "<node id>"}` | Plan it (MAPF / space-time A*), set `route`, set `status = "taxiing"` |
-| `POST` | `/api/aircraft/{id}/hold` | `{"hold": true \| false}` | `status = "holding"`, or back to `"taxiing"` |
+| `POST` | `/api/vehicles` | `{"id": "TRUCK01", "position": "<node>"}` | Spawn a truck |
+| `POST` | `/api/vehicles/{id}/route` | `{"destination": "<node>"}` | Drive there by the shortest path. Runway crossings are allowed |
+| `POST` | `/api/vehicles/{id}/hold` | `{"hold": true \| false}` | Stop or continue |
 
-### 5. Play the arrivals sim into state
-For example, `POST /api/scenario/load {"scenario_id": "arrivals"}` runs `arrivals.simulate()`, and the tick loop advances each plane along its plan.
+## 3. Alerts with text and audio
+Add `alerts` to `SimulationState` (or `GET /api/alerts`), one per active conflict:
 
-## Field contract the frontend relies on
+| Field | Example |
+|---|---|
+| `id` | `"ALT-12"` |
+| `severity` | from `calculate_alert_severity(conflict.severity, fatigue_score)` |
+| `text` | `"Fire truck is crossing runway 4L/22R while UAL334 is landing."` |
+| `atc_phrase` | `"TRUCK01, hold short runway 4L. UAL334, go around."` |
+| `audio_url` | ElevenLabs clip. Pre-generate the common ones; the key stays on the server |
+| `vehicle_ids` | `["TRUCK01", "AC-…"]` |
+| `created_s` | sim time |
 
-Please keep these meanings:
+## 4. Fatigue score → alert severity
+The frontend measures fatigue in the browser and will POST it every second:
+
+| Method | Path | Body |
+|---|---|---|
+| `POST` | `/api/fatigue` | `{"score": 0-100, "perclos": 0-1, "alarm": bool}` |
+
+Keep the latest value and pass `score / 100` as `fatigue_score` into `calculate_alert_severity`.
+
+## 5. Time to impact on runway conflicts
+For runway-incursion conflicts, add `seconds_to_conflict` to `Conflict`: how long until the landing or departing aircraft reaches the intruder. The crash-challenge result screen shows "Crash prevented X seconds before touchdown".
+
+## 6. Speech to route (lowest priority)
+`speech/parser.py` is a stub. Add `POST /api/speech` (audio upload) → transcribe → `parse_clearance` → route the aircraft. Support one pattern: callsign, "taxi to runway X via", taxiway list, optional "hold short".
+
+---
+
+## Don't change (the frontend depends on these)
 
 | Field | Meaning |
 |---|---|
-| `route` | Full list of node IDs, start → goal, **including the start node** |
-| `progress` | Fraction of the **whole route's** length, `0` to `1` (not per edge) |
+| node IDs | Must be `KEWR_ground.json` IDs. If they change, tell frontend; the map is built from that file |
+| `route` | Node IDs start → goal, including the start |
+| `progress` | Fraction of the **whole** route, 0–1 |
 | `position` | Last node passed |
-| `status` | `"waiting"` \| `"taxiing"` \| `"holding"` \| `"arrived"` |
-| `vehicles[]` | Trucks. Same `id` / `position` / `route` / `progress` fields |
-| `conflicts[].aircraft_ids` | Can include vehicle IDs |
-| `conflicts[].severity` / `location` | For runway incursions use `"critical"` and the runway ref (e.g. `"4L/22R"`). The crash challenge depends on this |
-
-## Small stuff
-
-- `requirements.txt` is saved as UTF-16, so `pip install -r` may fail. Re-save it as UTF-8, and add `matplotlib` and `pandas` (the arrivals GIF and `test_replay` need them).
-- Run on `127.0.0.1:8000`. The frontend proxies `/api` through Vite, so no CORS changes are needed.
-- If `KEWR_ground.json` node IDs change, tell the frontend team. The map has to be rebuilt from it with `frontend/scripts/build_chart.py`.
+| `status` | `waiting` \| `taxiing` \| `holding` \| `arrived` (add `landing` if you do #1) |
+| `vehicles[]` | Same `id` / `position` / `route` / `progress` as aircraft |
+| `conflicts[]` | `aircraft_ids` may include vehicle IDs; runway incursions use `critical` + the runway pair (e.g. `"4L/22R"`) |
 
 ## How to test
-
-```bash
-cd frontend
-npm install
-npm run dev
+```powershell
+cd backend
+py -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
-
-Open <http://127.0.0.1:5173/sim>. The badge in the top-left reads:
-
-- `Demo traffic · backend offline`: backend not running on port 8000
-- `Demo traffic · backend IDs not on map`: steps 1–2 not done yet
-- `Live`: working
+Then run the frontend (`cd frontend`, `npm install`, `npm run dev`) and open <http://127.0.0.1:5173/sim>. The top-left badge reads **LIVE** when the state is drawable.
