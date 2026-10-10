@@ -50,6 +50,7 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-taxiway: var(--taxiway);
+  --color-runway: var(--runway);
   --color-beacon: var(--beacon);
   --color-scrim: var(--scrim);
 }
@@ -92,6 +93,7 @@
   /* ATC tokens */
   --taxiway: oklch(0.82 0.15 85); /* yellow taxiway / hold-short paint */
   --beacon: oklch(0.72 0.14 240); /* blue location markers on the map */
+  --runway: oklch(0.92 0.01 250); /* runway pavement and markings */
   --scrim: oklch(0.13 0.02 255 / 70%); /* darkens the backdrop behind UI */
 }
 
