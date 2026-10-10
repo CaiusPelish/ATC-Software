@@ -61,3 +61,4 @@ def plot_ewr(df, out="ewr.png", max_alt_ft=100):
 if __name__ == "__main__":
     df = print_ewr()
     plot_ewr(df)
+
