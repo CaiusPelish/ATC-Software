@@ -2,7 +2,6 @@ import { Link } from "react-router";
 import { BellRing, Eye, Play, Route as RouteIcon } from "lucide-react";
 
 import type { Route } from "./+types/home";
-<<<<<<< HEAD
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import {
@@ -11,10 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "~/components/ui/card";
-=======
-import { Link } from "react-router";
-import { Welcome } from "../welcome/welcome";
->>>>>>> 33256fa (Set up uv backend and connect simulation frontend)
+
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -59,7 +55,6 @@ function HoldShortMarking() {
 
 export default function Home() {
   return (
-<<<<<<< HEAD
     <main className="relative flex min-h-svh flex-col overflow-hidden bg-background">
       <img
         src="/ewr-backdrop.png"
