@@ -281,7 +281,7 @@
 .drowsy-overview > p {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
 }
 
@@ -338,7 +338,7 @@
 .camera-card-heading p {
   margin: 5px 0 0;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .camera-state {
@@ -528,7 +528,7 @@
   gap: 12px;
   padding: 12px 2px 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .camera-footnote span {
@@ -750,13 +750,13 @@
 }
 
 .interpretation-header [data-slot="card-title"] {
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .interpretation-header p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .interpretation-content {
@@ -772,7 +772,7 @@
   gap: 9px;
   border-top: 1px solid oklch(1 0 0 / 6%);
   color: oklch(0.8 0.015 250);
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .interpretation-index {
@@ -816,13 +816,13 @@
 
 .privacy-copy strong {
   color: oklch(0.89 0.01 250);
-  font-size: 11px;
+  font-size: 14px;
   font-weight: 650;
 }
 
 .privacy-copy span {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -837,9 +837,9 @@
   align-items: flex-start;
   gap: 7px;
   margin-top: 14px;
-  color: oklch(0.65 0.02 250);
-  font-size: 11px;
-  line-height: 1.5;
+  color: oklch(0.76 0.02 250);
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .drowsy-disclaimer svg {
@@ -933,7 +933,7 @@
 
   .drowsy-title p {
     max-width: 265px;
-    font-size: 12px;
+    font-size: 14px;
   }
 
   .drowsy-actions {
@@ -966,7 +966,7 @@
   }
 
   .drowsy-overview > p {
-    font-size: 12px;
+    font-size: 14px;
   }
 
   .camera-card-heading {
@@ -995,7 +995,7 @@
     flex-direction: column;
     gap: 7px;
     padding-inline: 2px;
-    font-size: 11px;
+    font-size: 13px;
   }
 
   .assessment-column {
@@ -1015,6 +1015,10 @@
   .privacy-icon {
     width: 30px;
     height: 30px;
+  }
+
+  .drowsy-disclaimer {
+    font-size: 13px;
   }
 }
 
@@ -1136,7 +1140,7 @@
 }
 
 .sim-monitor-body {
-  max-height: 340px;
+  max-height: 420px;
   overflow: hidden;
   padding: 0 12px 12px;
   opacity: 1;
@@ -1335,7 +1339,7 @@
   gap: 6px;
   margin: 9px 2px 0;
   color: oklch(0.7 0.025 250);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -1343,6 +1347,22 @@
   flex: 0 0 auto;
   margin-top: 1px;
   color: oklch(0.75 0.08 225);
+}
+
+.sim-monitor-disclaimer {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 9px 2px 0;
+  color: oklch(0.78 0.025 250);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.sim-monitor-disclaimer svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: oklch(0.82 0.13 85);
 }
 
 @media (max-width: 600px) {

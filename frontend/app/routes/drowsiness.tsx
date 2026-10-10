@@ -227,7 +227,12 @@ export default function DrowsinessMonitorPage() {
 
         <footer className="drowsy-disclaimer">
           <Info size={14} />
-          <span>This experimental aid is not a medical or safety-critical system. Follow your organization&apos;s fatigue-management procedures.</span>
+          <span>
+            This experimental aid is not a medical or safety-critical system.
+            Accuracy depends on good lighting and keeping your face clearly in
+            frame; poor lighting or framing can cause misjudgments. Follow your
+            organization&apos;s fatigue-management procedures.
+          </span>
         </footer>
       </section>
     </main>

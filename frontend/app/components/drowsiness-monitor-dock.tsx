@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronUp,
   Eye,
+  Info,
   UserRound,
   Volume2,
   VolumeX,
@@ -140,6 +141,15 @@ export function DrowsinessMonitorDock() {
           {soundEnabled
             ? "Beep repeats during an alarm; ElevenLabs speaks when drowsiness is detected."
             : "Drowsiness sound alerts are muted."}
+        </p>
+
+        <p className="sim-monitor-disclaimer">
+          <Info size={14} aria-hidden="true" />
+          <span>
+            Experimental aid, not safety-critical. Accuracy depends on good
+            lighting and keeping your face in frame; poor lighting or framing
+            can cause misjudgments.
+          </span>
         </p>
       </div>
 
