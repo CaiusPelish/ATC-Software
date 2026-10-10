@@ -7,4 +7,8 @@ export default defineConfig({
   resolve: {
     tsconfigPaths: true,
   },
+  // Loopback only, so Windows Firewall never prompts (no admin on dev machines).
+  server: {
+    host: "127.0.0.1",
+  },
 });
