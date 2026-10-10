@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { Play } from "lucide-react";
+import { Eye, Play } from "lucide-react";
 
 import type { Route } from "./+types/home";
 import { Badge } from "~/components/ui/badge";
@@ -80,11 +80,22 @@ export default function Home() {
           </p>
         </CardContent>
 
-        <CardFooter className="justify-center">
+        <CardFooter className="flex-wrap justify-center gap-3">
           <Button asChild size="lg" className="font-mono tracking-widest uppercase">
             <Link to="/app">
               <Play className="fill-current" />
               Start Simulation
+            </Link>
+          </Button>
+          <Button
+            asChild
+            size="lg"
+            variant="outline"
+            className="font-mono tracking-widest uppercase"
+          >
+            <Link to="/drowsiness">
+              <Eye />
+              Drowsiness Monitor
             </Link>
           </Button>
         </CardFooter>
