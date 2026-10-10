@@ -65,15 +65,42 @@ def position_at(airport, path, t, parks):
     return None
 
 
-def animate(airport, requests, result, out, title, stride=1, zoom=True):
+def track_position(track, t_s):
+    """(lat, lon) on a [(t_seconds, lat, lon)] track at t_s, or None outside it."""
+    if not track or not track[0][0] <= t_s <= track[-1][0]:
+        return None
+    for (t0, la0, lo0), (t1, la1, lo1) in zip(track, track[1:]):
+        if t0 <= t_s <= t1:
+            s = 0 if t1 == t0 else (t_s - t0) / (t1 - t0)
+            return la0 + s * (la1 - la0), lo0 + s * (lo1 - lo0)
+    return None
+
+
+def animate(airport, requests, result, out, title, stride=1, zoom=True, runways=(), tracks=None,
+            labels_for=None, subtitle=None, fps=8):
+    """Render the plan as a GIF.
+
+    runways: Runway objects to draw. tracks: {aid: [(t_seconds, lat, lon)]}
+    for where an aircraft is before its taxi path starts (on final, rolling
+    out); drawn as a triangle. labels_for: {aid: text} to label dots with.
+    stride may be fractional (e.g. 0.5 for two frames per timestep).
+    """
+    tracks = tracks or {}
+    names = labels_for or {}
     parks = {r.id: r.goal_hold is None for r in requests}
     conflicts = check_paths(result.paths, park_at_goal=all(parks.values()))
     ids = sorted(result.paths)
     colours = {aid: plt.cm.tab10(i % 10) for i, aid in enumerate(ids)}
     t_first = min(p[0][1] for p in result.paths.values())
+    t_first = min([t_first] + [tr[0][0] / DT for tr in tracks.values() if tr])
     t_last = max(p[-1][1] for p in result.paths.values()) + 2
 
     fig, ax = plt.subplots(figsize=(10, 10))
+    for rw in runways:
+        (la0, lo0), (la1, lo1) = rw.threshold, rw.far_end
+        ax.plot([lo0, lo1], [la0, la1], color="#5b6068", lw=7, solid_capstyle="butt", zorder=0)
+        ax.annotate(rw.name, (lo0, la0), xytext=(6, 6), textcoords="offset points",
+                    fontsize=10, weight="bold", color="#5b6068")
     drawn = set()
     for a, nbrs in airport.graph.items():
         for b in nbrs:
@@ -97,8 +124,8 @@ def animate(airport, requests, result, out, title, stride=1, zoom=True):
         node = airport.nodes[c.node or c.edge[0]]
         ax.scatter(node.lon, node.lat, marker="x", s=200, color="red", zorder=6)
 
-    lats = [p[0] for p in route_pts]
-    lons = [p[1] for p in route_pts]
+    lats = [p[0] for p in route_pts] + [p[1] for tr in tracks.values() for p in tr[-3:]]
+    lons = [p[1] for p in route_pts] + [p[2] for tr in tracks.values() for p in tr[-3:]]
     if zoom:
         pad = 0.001
         ax.set_xlim(min(lons) - pad, max(lons) + pad)
@@ -109,20 +136,29 @@ def animate(airport, requests, result, out, title, stride=1, zoom=True):
     ax.set_yticks([])
 
     dots = ax.scatter([], [], s=90, zorder=4, edgecolors="white", linewidths=1)
+    flying = ax.scatter([], [], s=130, marker="^", zorder=4, edgecolors="black", linewidths=0.8)
     rings = ax.scatter([], [], s=320, facecolors="none", edgecolors="#333", linewidths=1.5, zorder=3)
-    labels = {aid: ax.text(0, 0, aid, fontsize=8, weight="bold", zorder=5, visible=False) for aid in ids}
+    labels = {aid: ax.text(0, 0, names.get(aid, aid), fontsize=8, weight="bold", zorder=5, visible=False)
+              for aid in ids}
     clock = ax.text(0.02, 0.97, "", transform=ax.transAxes, fontsize=12, weight="bold", va="top")
-    status = (f"{len(result.paths)} planned, {len(result.failures)} failed, "
-              f"{len(conflicts)} conflicts, delay {result.total_delay_steps * DT}s")
+    status = subtitle or (f"{len(result.paths)} planned, {len(result.failures)} failed, "
+                          f"{len(conflicts)} conflicts, delay {result.total_delay_steps * DT}s")
     ax.set_title(f"{title}\n{status}", fontsize=11)
 
     def frame(t):
-        xy, cols, waiting = [], [], []
+        xy, cols, waiting, air, air_cols = [], [], [], [], []
         for aid in ids:
             pos = position_at(airport, result.paths[aid], t, parks[aid])
             label = labels[aid]
             if pos is None:
-                label.set_visible(False)
+                flown = track_position(tracks.get(aid), t * DT)
+                if flown is None:
+                    label.set_visible(False)
+                    continue
+                air.append((flown[1], flown[0]))
+                air_cols.append(colours[aid])
+                label.set_position((flown[1], flown[0]))
+                label.set_visible(True)
                 continue
             lat, lon, wait = pos
             xy.append((lon, lat))
@@ -134,13 +170,16 @@ def animate(airport, requests, result, out, title, stride=1, zoom=True):
         dots.set_offsets(xy or [(math.nan, math.nan)])
         dots.set_facecolors(cols or ["none"])
         rings.set_offsets(waiting or [(math.nan, math.nan)])
-        clock.set_text(f"t = {t * DT}s")
-        return [dots, rings, clock, *labels.values()]
+        flying.set_offsets(air or [(math.nan, math.nan)])
+        flying.set_facecolors(air_cols or ["none"])
+        clock.set_text(f"t = {int(t * DT) // 60}:{int(t * DT) % 60:02d}")
+        return [dots, rings, flying, clock, *labels.values()]
 
-    frames = range(t_first, t_last, stride)
+    n_frames = int((t_last - t_first) / stride)
+    frames = [t_first + k * stride for k in range(n_frames)]
     anim = FuncAnimation(fig, frame, frames=frames, blit=False)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    anim.save(out, writer=PillowWriter(fps=8))
+    anim.save(out, writer=PillowWriter(fps=fps))
     plt.close(fig)
     return out, conflicts
 

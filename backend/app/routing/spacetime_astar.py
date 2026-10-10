@@ -5,7 +5,9 @@
 From each state the aircraft can wait a step at its node or start along an
 edge, which takes airport.steps[u][v] steps. A move is allowed only if the
 edge is free over the whole traversal and the next node is free on arrival.
-Cost is arrival time, with a tiny penalty per wait so moving wins ties.
+Cost is arrival time, plus a tiny penalty per step spent moving: of two
+routes that arrive at the same time, the one with less taxiing wins, so an
+aircraft holds short rather than shuttling back and forth to burn time.
 """
 
 import heapq
@@ -15,7 +17,7 @@ from dataclasses import dataclass
 from .airport import DT, NODE_BUFFER
 from .reservations import ConflictInfo
 
-WAIT_PENALTY = 0.01
+MOVE_PENALTY = 0.001
 # Extra steps of horizon beyond 4x the straight-line estimate.
 HORIZON_SLACK = 120
 
@@ -40,7 +42,8 @@ def plan(airport, aid, start, goal, t_start, reservations, *, edge_allowed=None,
     (a departure lining up and rolling); the returned path includes the hold.
 
     edge_allowed(u, v, t_enter) -> bool lets callers gate edges by time, e.g.
-    runway crossings that are only open during a crossing window.
+    runway crossings that are only open during a crossing window. It is also
+    asked about waits, as edge_allowed(u, u, t), so nobody waits on a runway.
     """
     for node in (start, goal):
         if node not in airport.graph:
@@ -97,9 +100,9 @@ def plan(airport, aid, start, goal, t_start, reservations, *, edge_allowed=None,
             nstate = (nxt, t_next)
             if nstate in closed:
                 continue
+            if edge_allowed and not edge_allowed(node, nxt, t):
+                continue
             if nxt != node:
-                if edge_allowed and not edge_allowed(node, nxt, t):
-                    continue
                 clash = reservations.edge_conflict(node, nxt, t, t_next, ignore=aid)
                 if clash:
                     blockers[clash.other_id] += 1
@@ -110,7 +113,7 @@ def plan(airport, aid, start, goal, t_start, reservations, *, edge_allowed=None,
                 blockers[clash.other_id] += 1
                 first_blocker.setdefault(clash.other_id, clash)
                 continue
-            cost = g[state] + d + (WAIT_PENALTY if nxt == node else 0)
+            cost = g[state] + d + (MOVE_PENALTY * d if nxt != node else 0)
             if cost < g.get(nstate, float("inf")):
                 g[nstate] = cost
                 parent[nstate] = state

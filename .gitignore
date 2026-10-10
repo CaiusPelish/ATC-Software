@@ -29,3 +29,6 @@ data/processed/
 backend/app/simulation/data/kewr_*.csv
 backend/app/simulation/ewr.png
 
+
+# Rendered MAPF animations (regenerate with app.routing.visualize_plan / app.simulation.arrivals)
+backend/app/simulation/data/plans/
