@@ -6,6 +6,7 @@ class Aircraft(BaseModel):
     callsign: str
     position: str
     destination: str
+    aircraft_type: str = "A320"
     route: list[str] = Field(default_factory=list)
     speed: float = 0.0
     progress: float = 0.0
@@ -35,3 +36,14 @@ class SimulationState(BaseModel):
     vehicles: list[Vehicle] = Field(default_factory=list)
     conflicts: list[Conflict] = Field(default_factory=list)
     score: int = 1000
+
+class SpawnAircraftRequest(BaseModel):
+    callsign: str
+    aircraft_type: str = "A320"
+    position: str
+    destination: str
+
+
+class SpawnAircraftResponse(BaseModel):
+    aircraft: Aircraft
+    message: str

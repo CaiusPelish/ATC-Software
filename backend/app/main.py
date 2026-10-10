@@ -10,6 +10,12 @@ from .simulation import state as simulation
 from pydantic import BaseModel
 from .simulation.scenarios import load_scenario
 
+from .models import (
+    SpawnAircraftRequest,
+    SpawnAircraftResponse
+)
+from .simulation.spawner import spawn_aircraft
+
 class ScenarioRequest(BaseModel):
     scenario_id: str
 
@@ -83,3 +89,27 @@ def load_game_scenario(request: ScenarioRequest):
         )
 
     return simulation.state
+
+@app.post(
+    "/api/aircraft/spawn",
+    response_model=SpawnAircraftResponse,
+    status_code=201
+)
+def create_aircraft(request: SpawnAircraftRequest):
+
+    try:
+        aircraft = spawn_aircraft(
+            simulation.state,
+            request
+        )
+
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc)
+        )
+
+    return SpawnAircraftResponse(
+        aircraft=aircraft,
+        message="Aircraft spawned successfully"
+    )
