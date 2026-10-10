@@ -23,4 +23,6 @@ def simulation_tick(
             if aircraft.progress >= 1.0:
                 aircraft.progress = 1.0
 
+    detect_conflicts(state)
+
     return state

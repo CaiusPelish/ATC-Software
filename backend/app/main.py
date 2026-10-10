@@ -7,6 +7,12 @@ from .routing.astar import astar
 from .models import SimulationState
 from .simulation import state as simulation
 
+from pydantic import BaseModel
+from .simulation.scenarios import load_scenario
+
+class ScenarioRequest(BaseModel):
+    scenario_id: str
+
 app = FastAPI(title="Hold Short Backend")
 
 app.add_middleware(
@@ -63,3 +69,17 @@ def get_route(
         )
 
     return result
+
+@app.post("/api/scenario/load")
+def load_game_scenario(request: ScenarioRequest):
+    try:
+        simulation.state = load_scenario(
+            request.scenario_id
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc)
+        )
+
+    return simulation.state
