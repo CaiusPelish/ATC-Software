@@ -19,6 +19,8 @@ airport_graph = json.load(open(".../KEWR_ground.json"))["graph"]
 
 It's the same `{node: {neighbor: cost}}` shape, so A*, `/api/route` and the spawner pick it up automatically.
 
+> **Simple vs ground:** `KEWR_ground.json` is `KEWR_taxiway_graph_simple.json` plus the runway nodes, so every simple-graph ID is already on the map, and either file works. Use **ground**: the simple graph has no runway nodes, so planes can't land, cross a runway or line up, and the crash challenge needs all three. The old 1,462-node `KEWR_taxiway_graph.json` is not used by the frontend anymore.
+
 ### 2. Real node IDs in state
 In `simulation/state.py` and `simulation/scenarios.py`, replace `GATE_A1`, `T1` and `RWY_4` with `KEWR_ground` IDs, e.g. `"rwy_4L"`, or ramp ends like `"45452380"`.
 The frontend switches to **Live** as soon as every `position` is a `KEWR_ground` ID.
