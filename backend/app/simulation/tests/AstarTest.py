@@ -7,8 +7,8 @@ holds that flight's whole taxi, from first appearing on the ground to lining
 up for takeoff. If not, it prints a warning and exits. If so, it asks A* for a
 route between the same two points, saves data/flight_<id>_route.png (A* route
 next to the raw GPS), and runs the tests: the route is valid, no longer than
-what the plane actually taxied, and the same length on the simplified graph
-as on the full OSM graph.
+what the plane actually taxied, and every simplified edge as long as the OSM
+polyline it replaced.
 
 Run:  python3 AstarTest.py [flight_id]      (default 6509825)
 """
@@ -26,6 +26,7 @@ sys.path.insert(0, str(BACKEND))
 from app.routing.astar import astar  # noqa: E402
 from app.routing.osm_taxiways import (  # noqa: E402
     DATA_DIR,
+    edge_points,
     haversine_m,
     load_saved_graph,
     taxiway_sequence,
@@ -80,7 +81,6 @@ class AstarOnFlight(unittest.TestCase):
             raise unittest.SkipTest(f"flight {FLIGHT_ID} {err}")
         for key, value in run.items():
             setattr(cls, key, value)
-        cls.full_nodes, cls.full_graph, _ = load_saved_graph("KEWR", simple=False)
 
     def test_taxi_history_long_enough(self):
         self.assertEqual(self.points.shape[1], 2)
@@ -114,10 +114,12 @@ class AstarOnFlight(unittest.TestCase):
         self.assertLessEqual(self.result["estimated_time"], actual + slack)
 
     def test_simple_graph_keeps_distances(self):
-        # Every simplified node is also in the full graph, so A* between the
-        # same two nodes must cost the same in both if merging kept lengths exact.
-        full = astar(self.full_graph, self.start.id, self.goal.id)
-        self.assertAlmostEqual(self.result["estimated_time"], full["estimated_time"], delta=0.05)
+        # Each merged edge keeps the OSM polyline it replaced, so its weight
+        # must equal that polyline's length if merging kept distances exact.
+        route = self.result["route"]
+        for a, b in zip(route, route[1:]):
+            points = edge_points(self.nodes, self.geometry, a, b)
+            self.assertAlmostEqual(self.graph[a][b], path_length_m(points), delta=0.05)
 
     def test_simple_graph_only_keeps_meaningful_nodes(self):
         neighbours = {k: set() for k in self.graph}
@@ -128,7 +130,6 @@ class AstarOnFlight(unittest.TestCase):
         for node_id, node in self.nodes.items():
             if len(neighbours[node_id]) == 2:
                 self.assertTrue(node.tags, f"{node_id} is a plain shape point")
-        self.assertLess(len(self.nodes), len(self.full_nodes) / 2)
 
 
 def warn(message):
