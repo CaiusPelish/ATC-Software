@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/drowsiness";
 import { Link } from "react-router";
-import { AlertTriangle, ArrowLeft, Camera, CameraOff, Eye } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Camera,
+  CameraOff,
+  Eye,
+  Plane,
+} from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
 
@@ -219,17 +226,25 @@ export default function DrowsinessMonitorPage() {
             Opt-in webcam monitoring with computer vision
           </p>
         </div>
-        {monitoring ? (
-          <Button onClick={() => void stopMonitoring()} variant="outline">
-            <CameraOff />
-            Stop monitoring
+        <div className="flex flex-wrap items-center gap-2">
+          <Button asChild variant="outline">
+            <Link to="/sim">
+              <Plane />
+              Flight simulation
+            </Link>
           </Button>
-        ) : (
-          <Button onClick={() => void startMonitoring()}>
-            <Camera />
-            Start monitoring
-          </Button>
-        )}
+          {monitoring ? (
+            <Button onClick={() => void stopMonitoring()} variant="outline">
+              <CameraOff />
+              Stop monitoring
+            </Button>
+          ) : (
+            <Button onClick={() => void startMonitoring()}>
+              <Camera />
+              Start monitoring
+            </Button>
+          )}
+        </div>
       </header>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
