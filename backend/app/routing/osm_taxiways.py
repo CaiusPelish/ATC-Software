@@ -19,7 +19,8 @@ from pathlib import Path
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
 DATA_DIR = (
-    Path(__file__).resolve().parents[3]
+    Path(__file__).resolve().parents[1]
+    / "simulation"
     / "data"
     / "osm"
 )
@@ -96,6 +97,93 @@ def haversine_m(lat1, lon1, lat2, lon2):
     return 2 * r * math.asin(math.sqrt(a))
 
 
+def snap_to_nearest_node(nodes, lat, lon, max_distance_m=None):
+    """Return (TaxiwayNode, distance_m) for the node closest to lat/lon.
+
+    Returns None if max_distance_m is given and nothing is that close,
+    e.g. for an aircraft parked at a gate or still in the air.
+    """
+    best, best_dist = None, float("inf")
+    for node in nodes.values():
+        dist = haversine_m(lat, lon, node.lat, node.lon)
+        if dist < best_dist:
+            best, best_dist = node, dist
+
+    if best is None or (max_distance_m is not None and best_dist > max_distance_m):
+        return None
+    return best, best_dist
+
+
+def edge_points(nodes, geometry, a, b):
+    """[lat, lon] polyline of edge a -> b: its stored geometry, or a straight line."""
+    if geometry and f"{a}|{b}" in geometry:
+        return geometry[f"{a}|{b}"]
+    return [[nodes[a].lat, nodes[a].lon], [nodes[b].lat, nodes[b].lon]]
+
+
+def snap_to_nearest_edge(nodes, graph, lat, lon, max_distance_m=None, geometry=None):
+    """Return (node_a, node_b, distance_m, t) for the edge closest to lat/lon.
+
+    t is how far along a -> b the point projects, from 0 (at a) to 1 (at b),
+    measured along the edge's geometry when one is given (simplified graph).
+    Better than snap_to_nearest_node on long straight taxiways, where OSM
+    nodes can be hundreds of meters apart. Returns None if max_distance_m is
+    given and nothing is that close.
+    """
+    # Flat x/y in meters around the point; fine over an airport's few km.
+    m_per_deg_lat = 111_320
+    m_per_deg_lon = 111_320 * math.cos(math.radians(lat))
+
+    best, best_dist = None, float("inf")
+    seen = set()
+    for a, neighbors in graph.items():
+        for b in neighbors:
+            if (b, a) in seen:
+                continue
+            seen.add((a, b))
+            pts = [
+                ((p_lon - lon) * m_per_deg_lon, (p_lat - lat) * m_per_deg_lat)
+                for p_lat, p_lon in edge_points(nodes, geometry, a, b)
+            ]
+
+            edge_dist, along, total = float("inf"), 0.0, 0.0
+            for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
+                dx, dy = x2 - x1, y2 - y1
+                length_sq = dx * dx + dy * dy
+                s = 0.0 if length_sq == 0 else max(0.0, min(1.0, -(x1 * dx + y1 * dy) / length_sq))
+                dist = math.hypot(x1 + s * dx, y1 + s * dy)
+                if dist < edge_dist:
+                    edge_dist, along = dist, total + s * math.sqrt(length_sq)
+                total += math.sqrt(length_sq)
+
+            if edge_dist < best_dist:
+                t = along / total if total else 0.0
+                best, best_dist = (nodes[a], nodes[b], edge_dist, t), edge_dist
+
+    if best is None or (max_distance_m is not None and best_dist > max_distance_m):
+        return None
+    return best
+
+
+def edge_taxiway(nodes, a, b):
+    """The named taxiway edge a-b runs along, or None for unnamed connectors."""
+    shared = [
+        t for t in nodes[a].taxiways
+        if t in nodes[b].taxiways and not t.startswith("way_")
+    ]
+    return shared[0] if shared else None
+
+
+def taxiway_sequence(nodes, route):
+    """Collapse a node route into the taxiway names it uses, e.g. ['B', 'AA']."""
+    names = []
+    for a, b in zip(route, route[1:]):
+        name = edge_taxiway(nodes, a, b)
+        if name and (not names or names[-1] != name):
+            names.append(name)
+    return names
+
+
 def taxiway_label(tags, way_id):
     """Best human-readable name for a taxiway way."""
     return tags.get("ref") or tags.get("name") or f"way_{way_id}"
@@ -153,7 +241,67 @@ def build_graph(data):
     return nodes, graph
 
 
-def plot_taxiway_graph(nodes, graph, out, title=None):
+def simplify_graph(nodes, graph):
+    """Collapse chains of shape points into single edges.
+
+    Most OSM nodes only trace curves. Keep a node only if it is an
+    intersection (3+ neighbours), a dead end (1 neighbour), or tagged in OSM
+    (hold-short points), and join the kept nodes with one edge per chain.
+
+    Returns (nodes, graph, geometry): edge weights are the summed lengths in
+    meters, and geometry["a|b"] is the [lat, lon] polyline of edge a -> b so
+    curves can still be drawn and snapped to.
+    """
+    neighbours = {k: set() for k in graph}
+    for a, nbrs in graph.items():
+        for b in nbrs:
+            neighbours[a].add(b)
+            neighbours[b].add(a)
+
+    def passes_through(v):
+        # A shape point can only be merged away if traffic flows straight
+        # through it the same way in both hops (matters for one-way ways).
+        u, w = neighbours[v]
+        forward = v in graph[u], w in graph[v]
+        backward = v in graph[w], u in graph[v]
+        return forward[0] == forward[1] and backward[0] == backward[1] and (forward[0] or backward[0])
+
+    keep = {
+        v for v in graph
+        if len(neighbours[v]) != 2 or nodes[v].tags or not passes_through(v)
+    }
+
+    while True:
+        new_graph = {k: {} for k in keep}
+        geometry = {}
+        visited = set()
+        for a in keep:
+            for b in graph[a]:
+                path, cost = [a, b], graph[a][b]
+                while path[-1] not in keep:
+                    v = path[-1]
+                    nxt = next(n for n in graph[v] if n != path[-2])
+                    cost += graph[v][nxt]
+                    path.append(nxt)
+                visited.update(path[1:-1])
+                end = path[-1]
+                if end == a:
+                    continue  # chain loops back to where it started; no use for routing
+                if end not in new_graph[a] or cost < new_graph[a][end]:
+                    new_graph[a][end] = round(cost, 2)
+                    geometry[f"{a}|{end}"] = [[nodes[n].lat, nodes[n].lon] for n in path]
+
+        # A closed loop of shape points has nothing to start a walk from; keep
+        # one node of it and walk again.
+        leftover = set(graph) - keep - visited
+        if not leftover:
+            break
+        keep.add(min(leftover))
+
+    return {k: nodes[k] for k in keep}, new_graph, geometry
+
+
+def plot_taxiway_graph(nodes, graph, out, title=None, geometry=None):
     """Draw every edge and node, highlight junctions, and label each taxiway once."""
     import matplotlib
 
@@ -168,8 +316,8 @@ def plot_taxiway_graph(nodes, graph, out, title=None):
             if (b, a) in drawn:
                 continue
             drawn.add((a, b))
-            na, nb = nodes[a], nodes[b]
-            ax.plot([na.lon, nb.lon], [na.lat, nb.lat], color="#8a8f98", linewidth=0.8, zorder=1)
+            pts = edge_points(nodes, geometry, a, b)
+            ax.plot([p[1] for p in pts], [p[0] for p in pts], color="#8a8f98", linewidth=0.8, zorder=1)
 
     plain = [n for n in nodes.values() if not n.is_junction]
     junctions = [n for n in nodes.values() if n.is_junction]
@@ -199,37 +347,62 @@ def plot_taxiway_graph(nodes, graph, out, title=None):
     return out
 
 
-def load_taxiway_graph(icao="KEWR", use_cache=True):
-    """Fetch, build, and save the taxiway graph for an airport."""
-    nodes, graph = build_graph(fetch_taxiways(icao, use_cache))
+def graph_path(icao, simple):
+    return DATA_DIR / f"{icao.upper()}_taxiway_graph{'_simple' if simple else ''}.json"
 
-    out = DATA_DIR / f"{icao.upper()}_taxiway_graph.json"
-    with open(out, "w", encoding="utf-8") as file:
-        json.dump(
-            {"nodes": {k: n.to_dict() for k, n in nodes.items()}, "graph": graph},
-            file,
-            indent=2,
-        )
+
+def load_taxiway_graph(icao="KEWR", use_cache=True):
+    """Fetch, build, and save the taxiway graph for an airport.
+
+    Writes both the full graph (every OSM node) and the simplified one
+    (intersections, dead ends and hold-short points only). Returns the full one.
+    """
+    nodes, graph = build_graph(fetch_taxiways(icao, use_cache))
+    simple_nodes, simple_graph, geometry = simplify_graph(nodes, graph)
+
+    saves = [
+        (graph_path(icao, simple=False), nodes, graph, None),
+        (graph_path(icao, simple=True), simple_nodes, simple_graph, geometry),
+    ]
+    for out, n, g, geo in saves:
+        data = {"nodes": {k: node.to_dict() for k, node in n.items()}, "graph": g}
+        if geo is not None:
+            data["geometry"] = geo
+        with open(out, "w", encoding="utf-8") as file:
+            json.dump(data, file, indent=2)
 
     return nodes, graph
+
+
+def load_saved_graph(icao="KEWR", simple=True):
+    """Read a graph written by load_taxiway_graph(): (nodes, graph, geometry).
+
+    geometry is None for the full graph, whose edges are already straight.
+    """
+    with open(graph_path(icao, simple), "r", encoding="utf-8") as file:
+        data = json.load(file)
+    nodes = {k: TaxiwayNode.from_dict(v) for k, v in data["nodes"].items()}
+    return nodes, data["graph"], data.get("geometry")
 
 
 if __name__ == "__main__":
     import sys
 
     icao = sys.argv[1] if len(sys.argv) > 1 else "KEWR"
-    nodes, graph = load_taxiway_graph(icao)
+    load_taxiway_graph(icao)
 
-    edges = sum(len(v) for v in graph.values())
-    junctions = [n for n in nodes.values() if n.is_junction]
-    print(f"{icao}: {len(nodes)} nodes, {edges} directed edges, {len(junctions)} junctions")
-    for n in junctions[:10]:
-        print(f"  {n.name:<12} ({n.lat:.6f}, {n.lon:.6f})")
+    for simple in (False, True):
+        nodes, graph, geometry = load_saved_graph(icao, simple)
+        label = "simple" if simple else "full"
+        edges = sum(len(v) for v in graph.values())
+        junctions = [n for n in nodes.values() if n.is_junction]
+        print(f"{icao} {label}: {len(nodes)} nodes, {edges} directed edges, {len(junctions)} junctions")
 
-    image = plot_taxiway_graph(
-        nodes,
-        graph,
-        DATA_DIR / f"{icao.upper()}_taxiway_graph.png",
-        title=f"{icao.upper()} taxiways — {len(nodes)} nodes, {len(junctions)} junctions",
-    )
-    print(f"Saved {image}")
+        image = plot_taxiway_graph(
+            nodes,
+            graph,
+            graph_path(icao, simple).with_suffix(".png"),
+            title=f"{icao.upper()} taxiways ({label}) — {len(nodes)} nodes, {len(junctions)} junctions",
+            geometry=geometry,
+        )
+        print(f"  saved {image}")
