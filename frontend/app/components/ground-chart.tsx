@@ -1,9 +1,11 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize, Minus, Plus, X } from "lucide-react";
 
 import { Button } from "~/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
+import { VehicleLayer } from "~/components/vehicle-layer";
 import { chart, describe, type HoverTarget, type Point } from "~/lib/chart";
+import { vehiclesOf, type SimulationState, type VehicleInfo } from "~/lib/sim-state";
 import { cn } from "~/lib/utils";
 
 const { width, height } = chart.projection;
@@ -25,7 +27,7 @@ function zoomTier(zoom: number) {
   return 2; // + intersections and taxiway ends
 }
 
-function lookup(el: Element | null): HoverTarget | null {
+function lookup(el: Element | null, vehicles: Map<string, VehicleInfo>): HoverTarget | null {
   const hit = el?.closest<SVGElement>("[data-kind]");
   const id = hit?.dataset.id;
   if (!hit || !id) return null;
@@ -41,6 +43,10 @@ function lookup(el: Element | null): HoverTarget | null {
     case "node": {
       const item = nodesById.get(id);
       return item ? { kind: "node", item } : null;
+    }
+    case "vehicle": {
+      const item = vehicles.get(id);
+      return item ? { kind: "vehicle", item } : null;
     }
   }
   return null;
@@ -233,7 +239,7 @@ const Nodes = memo(function Nodes({
   );
 });
 
-export function GroundChart({ className }: { className?: string }) {
+export function GroundChart({ className, state }: { className?: string; state: SimulationState | null }) {
   const [view, setView] = useState<View>(FULL_VIEW);
   const [hovered, setHovered] = useState<HoverTarget | null>(null);
   const [selected, setSelected] = useState<HoverTarget | null>(null);
@@ -242,6 +248,9 @@ export function GroundChart({ className }: { className?: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const drag = useRef<{ startX: number; startY: number; view: View; moved: boolean } | null>(null);
+
+  const vehicles = useMemo(() => (state ? vehiclesOf(state) : []), [state]);
+  const vehiclesById = useMemo(() => new Map(vehicles.map((v) => [v.id, v])), [vehicles]);
 
   const zoom = width / view.w;
   const tier = zoomTier(zoom);
@@ -252,6 +261,8 @@ export function GroundChart({ className }: { className?: string }) {
   const hoveredTaxiway = hovered?.kind === "taxiway" ? hovered.item.id : null;
   const activeRunway =
     (hovered?.kind === "runway" && hovered.item.id) || (selected?.kind === "runway" && selected.item.id) || null;
+  const activeVehicle =
+    (hovered?.kind === "vehicle" && hovered.item.id) || (selected?.kind === "vehicle" && selected.item.id) || null;
   const activeNode =
     (hovered?.kind === "node" && hovered.item.id) || (selected?.kind === "node" && selected.item.id) || null;
 
@@ -321,7 +332,7 @@ export function GroundChart({ className }: { className?: string }) {
       const flipY = y > box.height - 160;
       tip.style.transform = `translate(${flipX ? x - 16 : x + 16}px, ${flipY ? y - 16 : y + 16}px) translate(${flipX ? "-100%" : "0"}, ${flipY ? "-100%" : "0"})`;
     }
-    const next = lookup(e.target as Element);
+    const next = lookup(e.target as Element, vehiclesById);
     if (keyOf(next) !== hoveredKey) setHovered(next);
   }
 
@@ -334,12 +345,17 @@ export function GroundChart({ className }: { className?: string }) {
       return;
     }
     // A click without dragging: select what's under the cursor, or clear on empty map.
-    const target = lookup(document.elementFromPoint(e.clientX, e.clientY));
+    const target = lookup(document.elementFromPoint(e.clientX, e.clientY), vehiclesById);
     setSelected(target && keyOf(target) === selectedKey ? null : target);
   }
 
-  const tip = hovered && keyOf(hovered) !== selectedKey ? describe(hovered) : null;
-  const panel = selected ? describe(selected) : null;
+  // Vehicles change every poll, so re-read them by id instead of showing a stale snapshot.
+  const fresh = (t: HoverTarget | null): HoverTarget | null =>
+    t?.kind === "vehicle" ? { kind: "vehicle", item: vehiclesById.get(t.item.id) ?? t.item } : t;
+  const tipTarget = fresh(hovered);
+  const tip = tipTarget && keyOf(tipTarget) !== selectedKey ? describe(tipTarget) : null;
+  const panelTarget = fresh(selected);
+  const panel = panelTarget ? describe(panelTarget) : null;
   const selectedNodes = selectedTaxiway ? chart.nodes.filter((n) => n.on.includes(selectedTaxiway)) : [];
 
   return (
@@ -368,6 +384,7 @@ export function GroundChart({ className }: { className?: string }) {
           selectedTaxiway={selectedTaxiway}
           tier={tier}
         />
+        <VehicleLayer vehicles={vehicles} activeId={activeVehicle} />
       </svg>
 
       <div ref={tooltipRef} className="pointer-events-none absolute top-0 left-0 z-10">

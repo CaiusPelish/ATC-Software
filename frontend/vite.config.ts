@@ -10,5 +10,9 @@ export default defineConfig({
   // Loopback only, so Windows Firewall never prompts (no admin on dev machines).
   server: {
     host: "127.0.0.1",
+    // Browser only talks to Vite; Vite forwards /api to FastAPI, so CORS never comes up.
+    proxy: {
+      "/api": "http://127.0.0.1:8000",
+    },
   },
 });

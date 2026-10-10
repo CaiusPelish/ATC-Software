@@ -202,7 +202,18 @@ def main(graph_path):
     data_dir = ROOT / "app" / "data"
     data_dir.mkdir(exist_ok=True)
     (data_dir / "kewr-chart.json").write_text(
-        json.dumps({"projection": proj, "runways": out_runways, "taxiways": taxiways, "nodes": shown}, separators=(",", ":")),
+        json.dumps(
+            {
+                "projection": proj,
+                "runways": out_runways,
+                "taxiways": taxiways,
+                "nodes": shown,
+                # Every node (including bends) so vehicles from the backend can be placed on any of them
+                "positions": {nid: px(n["lat"], n["lon"]) for nid, n in nodes.items()},
+                "graph": {nid: sorted(nb) for nid, nb in adj.items()},
+            },
+            separators=(",", ":"),
+        ),
         encoding="utf-8",
     )
     print(f"image {proj['width']}x{proj['height']}, {len(out_runways)} runways, {len(taxiways)} taxiways, {len(shown)} nodes")

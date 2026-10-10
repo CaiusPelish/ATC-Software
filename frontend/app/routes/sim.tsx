@@ -3,9 +3,12 @@ import { ArrowLeft } from "lucide-react";
 
 import type { Route } from "./+types/sim";
 import { GroundChart } from "~/components/ground-chart";
+import { LoadingScreen } from "~/components/loading-screen";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
+import { useSimState, type SimSource } from "~/hooks/use-sim-state";
+import { cn } from "~/lib/utils";
 
 export function meta({}: Route.MetaArgs) {
   return [{ title: "Hold Short · EWR Ground" }];
@@ -16,12 +19,26 @@ const legend = [
   { label: "Taxiway", swatch: <span className="h-0.5 w-5 bg-taxiway" /> },
   { label: "Hold-short point (zoom in)", swatch: <span className="size-2.5 rounded-full bg-taxiway" /> },
   { label: "Intersection (zoom in more)", swatch: <span className="size-2 rounded-full bg-foreground" /> },
+  { label: "Aircraft · taxiing", swatch: <span className="size-2.5 rotate-45 bg-beacon" /> },
+  { label: "Conflict", swatch: <span className="size-2.5 animate-pulse rounded-full border-2 border-destructive" /> },
 ];
 
+const sourceLabel: Record<string, { text: string; dot: string }> = {
+  connecting: { text: "Connecting…", dot: "bg-muted-foreground" },
+  live: { text: "Live", dot: "bg-beacon" },
+  offline: { text: "Demo traffic · backend offline", dot: "bg-taxiway" },
+  unmapped: { text: "Demo traffic · backend IDs not on map", dot: "bg-taxiway" },
+};
+
+const sourceKey = (s: SimSource) => (s.mode === "demo" ? s.reason : s.mode);
+
 export default function Sim() {
+  const { state, source } = useSimState();
+  const label = sourceLabel[sourceKey(source)];
+
   return (
     <main className="relative h-svh overflow-hidden bg-background">
-      <GroundChart className="absolute inset-0" />
+      <GroundChart className="absolute inset-0" state={state} />
 
       <header className="pointer-events-none absolute inset-x-0 top-0 flex items-center gap-3 p-4">
         <Button asChild variant="outline" size="icon" className="pointer-events-auto bg-scrim backdrop-blur">
@@ -35,6 +52,13 @@ export default function Sim() {
         >
           <span className="size-2 rounded-full bg-beacon" />
           KEWR · Ground
+        </Badge>
+        <Badge
+          variant="outline"
+          className="gap-2 bg-scrim px-3 py-1 font-mono tracking-wider text-muted-foreground uppercase backdrop-blur"
+        >
+          <span className={cn("size-2 rounded-full", label.dot, source.mode === "live" && "animate-pulse")} />
+          {label.text}
         </Badge>
       </header>
 
@@ -55,6 +79,9 @@ export default function Sim() {
       <p className="pointer-events-none absolute right-3 bottom-2 text-[10px] text-muted-foreground">
         Imagery: USGS · Map data © OpenStreetMap contributors
       </p>
+
+      {/* Covers the map while the chart image and first traffic update load behind it */}
+      <LoadingScreen stateReady={source.mode !== "connecting"} />
     </main>
   );
 }
