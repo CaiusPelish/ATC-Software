@@ -14,7 +14,6 @@ Run:  python3 AstarTest.py [flight_id]      (default 6509825)
 """
 
 import functools
-import math
 import sys
 import unittest
 from pathlib import Path
@@ -29,32 +28,18 @@ from app.routing.osm_taxiways import (  # noqa: E402
     DATA_DIR,
     haversine_m,
     load_saved_graph,
-    snap_to_nearest_edge,
     taxiway_sequence,
 )
-from app.simulation.plot_flight_route import (  # noqa: E402
-    TAKEOFF_ROLL_SPEED,
-    get_taxi_points,
-    plot_flight_route,
+from app.simulation.plot_flight_route import plot_flight_route  # noqa: E402
+from app.simulation.traffic import (  # noqa: E402
+    MIN_TAXI_SECONDS,
+    TRAFFIC_CSV,
+    NotEnoughHistory,
+    qualify_departure,
 )
 
 # Taken off argv before unittest sees it.
 FLIGHT_ID = int(sys.argv.pop(1)) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 6509825
-
-TRAFFIC_CSV = DATA_DIR.parent / "kewr_194_2h.csv"
-
-# Amelia reports 12.5 ft for aircraft on the ground at KEWR.
-GROUND_ALTITUDE_FT = 20
-# Less taxi than this isn't a route worth testing (e.g. first seen already lined up).
-MIN_TAXI_SECONDS = 60
-# Start and end points further than this from a taxiway (e.g. at a gate) can't be routed.
-MAX_SNAP_M = 50
-# KEWR magnetic variation (west), to turn the takeoff's true heading into a runway number.
-MAGNETIC_VARIATION_DEG = 13
-
-
-class NotEnoughHistory(Exception):
-    """The recording doesn't hold this flight's whole taxi to takeoff."""
 
 
 def path_length_m(points):
@@ -64,86 +49,25 @@ def path_length_m(points):
     )
 
 
-def runway_number(flight):
-    """Runway number from the heading at the start of the takeoff roll, e.g. '04'."""
-    roll = flight[flight["Speed"] > TAKEOFF_ROLL_SPEED].head(10)
-    rad = roll["Heading"].map(math.radians)
-    true_heading = math.degrees(math.atan2(rad.map(math.sin).mean(), rad.map(math.cos).mean()))
-    magnetic = (true_heading + MAGNETIC_VARIATION_DEG) % 360
-    number = round(magnetic / 10) % 36 or 36
-    return f"{number:02d}"
-
-
-def snap_to_graph_node(nodes, graph, geometry, lat, lon):
-    """Nearest end of the nearest taxiway edge, and how far the point is from it."""
-    hit = snap_to_nearest_edge(nodes, graph, lat, lon, MAX_SNAP_M, geometry)
-    if hit is None:
-        return None
-    a, b, _, t = hit
-    node = a if t < 0.5 else b
-    return node, haversine_m(lat, lon, node.lat, node.lon)
-
-
 @functools.lru_cache
 def prepare_flight(flight_id):
     """Check the flight's history, then run A* for it. Raises NotEnoughHistory."""
     df = pd.read_csv(TRAFFIC_CSV)
-    flight = df[df["ID"] == flight_id].sort_values("Frame")
-
-    if flight.empty:
-        raise NotEnoughHistory(f"is not in {TRAFFIC_CSV.name}")
-    if (flight["Type"] != 0).all():
-        raise NotEnoughHistory("is a ground vehicle or unknown target, not an aircraft")
-
-    first = flight.iloc[0]
-    if first["Altitude"] > GROUND_ALTITUDE_FT:
-        raise NotEnoughHistory(
-            f"is already in the air ({first['Altitude']:.0f} ft) when first seen, so it's an "
-            "arrival or overflight; only departures are supported"
-        )
-    if first["Speed"] > TAKEOFF_ROLL_SPEED:
-        raise NotEnoughHistory(f"is already on its takeoff roll ({first['Speed']:.0f} kt) when first seen")
-    if not (flight["Speed"] > TAKEOFF_ROLL_SPEED).any():
-        raise NotEnoughHistory(
-            "never starts a takeoff roll before the recording ends, so its taxi has no known end "
-            "(arrivals and planes still taxiing aren't supported)"
-        )
-
-    taxi = get_taxi_points(flight_id, TRAFFIC_CSV)
-    if len(taxi) < MIN_TAXI_SECONDS:
-        raise NotEnoughHistory(f"has only {len(taxi)} s of taxi before takeoff (need {MIN_TAXI_SECONDS} s)")
-
     nodes, graph, geometry = load_saved_graph("KEWR", simple=True)
-    start = snap_to_graph_node(nodes, graph, geometry, *taxi[0])
-    goal = snap_to_graph_node(nodes, graph, geometry, *taxi[-1])
-    if start is None:
-        raise NotEnoughHistory(f"starts more than {MAX_SNAP_M} m from any taxiway (e.g. at a gate)")
-    if goal is None:
-        raise NotEnoughHistory(f"lines up more than {MAX_SNAP_M} m from any taxiway")
-    if start[0].id == goal[0].id:
-        raise NotEnoughHistory("starts and lines up at the same taxiway node; there's no route to find")
+    run = qualify_departure(df[df["ID"] == flight_id], df["UnixTime"].min(), nodes, graph, geometry)
 
-    result = astar(graph, start[0].id, goal[0].id)
+    result = astar(graph, run["start"].id, run["goal"].id)
     if result is None:
         raise NotEnoughHistory("has no taxiway path in the graph between its start and line-up points")
 
-    note = None
-    if first["UnixTime"] == df["UnixTime"].min():
-        note = "already on the ground when the recording starts, so its taxi may have begun earlier"
-
+    flight = df[df["ID"] == flight_id].sort_values("Frame")
     return {
+        **run,
         "nodes": nodes,
         "graph": graph,
         "geometry": geometry,
         "points": flight[["Lat", "Lon"]].to_numpy(),
-        "taxi": taxi,
-        "start": start[0],
-        "start_dist": start[1],
-        "goal": goal[0],
-        "goal_dist": goal[1],
         "result": result,
-        "runway": runway_number(flight),
-        "note": note,
     }
 
 

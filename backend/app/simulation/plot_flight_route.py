@@ -26,22 +26,19 @@ sys.path.insert(0, str(BACKEND))
 
 from app.routing.astar import astar  # noqa: E402
 from app.routing.osm_taxiways import (  # noqa: E402
-    DATA_DIR,
     edge_points,
     edge_taxiway,
     load_saved_graph,
     snap_to_nearest_edge,
     taxiway_sequence,
 )
-
-TRAFFIC_CSV = DATA_DIR.parent / "kewr_194_2h.csv"
-
-# Above this speed the plane has started its takeoff roll, so it is no longer taxiing.
-TAKEOFF_ROLL_SPEED = 30
-# At or below this speed the plane is stopped (e.g. lined up waiting for takeoff clearance).
-STOPPED_SPEED = 1
-# GPS points further than this from any taxiway segment are skipped; A* fills the gap.
-SNAP_DISTANCE_M = 15
+from app.simulation.traffic import (  # noqa: E402,F401  (re-exported for older callers)
+    SNAP_DISTANCE_M,
+    STOPPED_SPEED,
+    TAKEOFF_ROLL_SPEED,
+    TRAFFIC_CSV,
+    taxi_points,
+)
 
 
 def get_taxi_points(flight_id, csv_path=TRAFFIC_CSV):
@@ -51,15 +48,10 @@ def get_taxi_points(flight_id, csv_path=TRAFFIC_CSV):
     the runway, so the taxi ends at the last stop before that.
     """
     df = pd.read_csv(csv_path)
-    flight = df[df["ID"] == flight_id].sort_values("Frame").reset_index(drop=True)
+    flight = df[df["ID"] == flight_id]
     if flight.empty:
         raise ValueError(f"No rows for flight {flight_id} in {csv_path}")
-    rolling = flight.index[flight["Speed"] > TAKEOFF_ROLL_SPEED]
-    end = rolling[0] if len(rolling) else len(flight)
-    stopped = flight.index[(flight.index < end) & (flight["Speed"] <= STOPPED_SPEED)]
-    if len(rolling) and len(stopped):
-        end = stopped[-1] + 1
-    return flight.loc[: end - 1, ["Lat", "Lon"]].to_numpy()
+    return taxi_points(flight)
 
 
 def actual_node_route(nodes, graph, points, geometry=None):
