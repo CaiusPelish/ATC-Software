@@ -1,28 +1,8 @@
 # backend/app/simulation/engine.py
 
-from ..models import SimulationState
-
-from ..conflicts.detector import detect_conflicts
+TICK_S = 0.25
 
 
-def simulation_tick(
-    state: SimulationState,
-    delta_time: float
-):
-    if not state.running:
-        return state
-
-    state.time += delta_time
-
-    for aircraft in state.aircraft:
-        if aircraft.status == "taxiing":
-            aircraft.progress += (
-                aircraft.speed * delta_time
-            )
-
-            if aircraft.progress >= 1.0:
-                aircraft.progress = 1.0
-
-    detect_conflicts(state)
-
-    return state
+def simulation_tick(sim, delta_time=TICK_S):
+    """Advance the live simulation (simulation/live.py) by delta_time seconds."""
+    return sim.tick(delta_time)

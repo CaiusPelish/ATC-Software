@@ -1,32 +1,12 @@
 # backend/app/routing/graph.py
 
-airport_graph = {
-    "GATE_A1": {
-        "T1": 5
-    },
-    "GATE_B2": {
-        "T2": 6
-    },
-    "T1": {
-        "GATE_A1": 5,
-        "T2": 4,
-        "T3": 7
-    },
-    "T2": {
-        "GATE_B2": 6,
-        "T1": 4,
-        "T3": 3
-    },
-    "T3": {
-        "T1": 7,
-        "T2": 3,
-        "RWY_4": 5,
-        "RWY_13": 8
-    },
-    "RWY_4": {
-        "T3": 5
-    },
-    "RWY_13": {
-        "T3": 8
-    }
-}
+"""The graph the API serves: KEWR_ground.json (taxiways plus runway nodes).
+
+Same {node: {neighbor: meters}} shape as before, so /api/graph, /api/route
+and the spawner use it as is. The frontend map is built from the same file,
+so every node id here is drawable there.
+"""
+
+from .ground_graph import load_ground_graph
+
+ground_nodes, airport_graph, ground_geometry, ground_kinds, runway_edges = load_ground_graph()

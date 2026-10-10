@@ -1,16 +1,22 @@
-from fastapi import FastAPI, HTTPException, Query
+import asyncio
+import contextlib
+
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .routing.graph import airport_graph
 from .routing.astar import astar
 
 from .models import SimulationState
-from .simulation import state as simulation
+from .simulation import state as world
+from .simulation.engine import TICK_S, simulation_tick
 
 from pydantic import BaseModel
 from .simulation.scenarios import load_scenario
 
 from .models import (
+    HoldRequest,
+    RouteRequest,
     SpawnAircraftRequest,
     SpawnAircraftResponse
 )
@@ -19,7 +25,43 @@ from .simulation.spawner import spawn_aircraft
 class ScenarioRequest(BaseModel):
     scenario_id: str
 
-app = FastAPI(title="Hold Short Backend")
+
+# Open /api/ws connections; each gets the full state after every tick.
+clients: set[WebSocket] = set()
+
+
+async def broadcast(payload: str):
+    async def send(ws):
+        try:
+            await asyncio.wait_for(ws.send_text(payload), timeout=1)
+        except Exception:
+            clients.discard(ws)
+
+    await asyncio.gather(*(send(ws) for ws in list(clients)))
+
+
+async def tick_loop():
+    loop = asyncio.get_running_loop()
+    last = loop.time()
+    while True:
+        await asyncio.sleep(TICK_S)
+        now = loop.time()
+        # Ticks that come late (a slow plan) catch up, so sim time tracks wall time.
+        simulation_tick(world.sim, min(now - last, 4 * TICK_S))
+        last = now
+        if clients:
+            await broadcast(world.sim.state.model_dump_json())
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    world.sim.state.running = True
+    task = asyncio.create_task(tick_loop())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Hold Short Backend", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,6 +71,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Every endpoint that changes the simulation is async, so it runs on the event
+# loop between ticks instead of in a worker thread in the middle of one.
+
 
 @app.get("/")
 def home():
@@ -36,14 +81,29 @@ def home():
 
 
 @app.get("/api/state", response_model=SimulationState)
-def get_state():
-    return simulation.state.model_copy(deep=True)
+async def get_state():
+    return world.sim.state.model_copy(deep=True)
+
+
+@app.websocket("/api/ws")
+async def state_socket(ws: WebSocket):
+    """Pushes the same JSON as GET /api/state after every tick (every 250 ms)."""
+    await ws.accept()
+    await ws.send_text(world.sim.state.model_dump_json())
+    clients.add(ws)
+    try:
+        while True:
+            await ws.receive_text()  # nothing to read; this just notices the close
+    except WebSocketDisconnect:
+        pass
+    finally:
+        clients.discard(ws)
 
 
 @app.post("/api/reset", response_model=SimulationState)
-def reset_simulation():
-    simulation.state = simulation.create_initial_state()
-    return simulation.state.model_copy(deep=True)
+async def reset_simulation():
+    world.sim = load_scenario("default")
+    return world.sim.state.model_copy(deep=True)
 
 
 @app.get("/api/graph")
@@ -76,10 +136,10 @@ def get_route(
 
     return result
 
-@app.post("/api/scenario/load")
-def load_game_scenario(request: ScenarioRequest):
+@app.post("/api/scenario/load", response_model=SimulationState)
+async def load_game_scenario(request: ScenarioRequest):
     try:
-        simulation.state = load_scenario(
+        world.sim = load_scenario(
             request.scenario_id
         )
     except ValueError as exc:
@@ -88,18 +148,18 @@ def load_game_scenario(request: ScenarioRequest):
             detail=str(exc)
         )
 
-    return simulation.state
+    return world.sim.state.model_copy(deep=True)
 
 @app.post(
     "/api/aircraft/spawn",
     response_model=SpawnAircraftResponse,
     status_code=201
 )
-def create_aircraft(request: SpawnAircraftRequest):
+async def create_aircraft(request: SpawnAircraftRequest):
 
     try:
         aircraft = spawn_aircraft(
-            simulation.state,
+            world.sim,
             request
         )
 
@@ -113,3 +173,27 @@ def create_aircraft(request: SpawnAircraftRequest):
         aircraft=aircraft,
         message="Aircraft spawned successfully"
     )
+
+
+def _act(action, aircraft_id, *args):
+    try:
+        return action(aircraft_id, *args).model_copy(deep=True)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Aircraft not found")
+    except ValueError as exc:
+        # No conflict-free route, already gone, on a landing roll, ...
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+@app.post("/api/aircraft/{aircraft_id}/route")
+async def route_aircraft(aircraft_id: str, request: RouteRequest):
+    try:
+        world.sim.destination_goal(request.destination)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return _act(world.sim.route, aircraft_id, request.destination)
+
+
+@app.post("/api/aircraft/{aircraft_id}/hold")
+async def hold_aircraft(aircraft_id: str, request: HoldRequest):
+    return _act(world.sim.hold, aircraft_id, request.hold)

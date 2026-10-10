@@ -40,8 +40,17 @@ class SimulationState(BaseModel):
 class SpawnAircraftRequest(BaseModel):
     callsign: str
     aircraft_type: str = "A320"
+    weight_class: str = "large"
     position: str
     destination: str
+
+
+class RouteRequest(BaseModel):
+    destination: str
+
+
+class HoldRequest(BaseModel):
+    hold: bool
 
 
 class SpawnAircraftResponse(BaseModel):

@@ -1,54 +1,46 @@
 from uuid import uuid4
 
-from ..models import Aircraft, SpawnAircraftRequest
-from ..routing.graph import airport_graph
-from .state import create_initial_state
+from ..models import SpawnAircraftRequest
+from ..routing.mapf import WEIGHT_CLASSES
 
 
-def spawn_aircraft(state, request: SpawnAircraftRequest):
+def spawn_aircraft(sim, request: SpawnAircraftRequest):
+    """Put an aircraft at a taxiway node, waiting for the controller to route it."""
 
-    # Check the requested spawn node.
-    if request.position not in airport_graph:
+    # The planner only knows taxiway nodes, so aircraft can't appear on a runway.
+    if request.position not in sim.ap.graph:
         raise ValueError("Invalid spawn position")
 
-    # Check the destination node.
-    if request.destination not in airport_graph:
+    # Check the destination node (a taxiway node, or a runway end to take off from).
+    try:
+        sim.destination_goal(request.destination)
+    except ValueError:
         raise ValueError("Invalid destination")
 
     # Prevent duplicate active callsigns.
     if any(
         a.callsign == request.callsign
         and a.status != "arrived"
-        for a in state.aircraft
+        for a in sim.state.aircraft
     ):
         raise ValueError("Callsign already active")
 
-    # Prevent spawning onto an occupied node.
-    if any(
-        a.position == request.position
-        and a.status != "arrived"
-        for a in state.aircraft
-    ):
+    # Prevent spawning onto an occupied node, or one someone is due to pass.
+    if not sim.node_free(request.position):
         raise ValueError("Spawn position occupied")
 
     if any(
         v.position == request.position
-        for v in state.vehicles
+        for v in sim.state.vehicles
     ):
         raise ValueError("Spawn position occupied by vehicle")
 
-    aircraft = Aircraft(
-        id=f"AC-{uuid4().hex[:8]}",
-        callsign=request.callsign,
-        aircraft_type=request.aircraft_type,
-        position=request.position,
-        destination=request.destination,
-        status="waiting",
-        route=[],
-        speed=0.0,
-        progress=0.0
+    weight = request.weight_class if request.weight_class in WEIGHT_CLASSES else "large"
+    return sim.add_waiting(
+        f"AC-{uuid4().hex[:8]}",
+        request.callsign,
+        request.aircraft_type,
+        weight,
+        request.position,
+        request.destination,
     )
-
-    state.aircraft.append(aircraft)
-
-    return aircraft
