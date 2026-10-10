@@ -1,28 +1,52 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { FaceLandmarker } from "@mediapipe/tasks-vision";
+// Bundled by Vite, so face tracking works offline and in the Docker build.
+import wasmLoaderPath from "@mediapipe/tasks-vision/vision_wasm_internal.js?url";
+import wasmBinaryPath from "@mediapipe/tasks-vision/vision_wasm_internal.wasm?url";
 
-export type DrowsinessResult = {
-  status: "alert" | "eyes_closed" | "drowsy" | "no_face";
-  face_detected: boolean;
-  eyes_closed: boolean;
-  closed_probability: number;
-  closed_duration: number;
-  perclos: number;
-  alarm: boolean;
-};
+import { FatigueTracker, pitchFromMatrix, type DrowsinessResult } from "~/lib/fatigue";
 
-const pollIntervalMs = 1000;
+export type { DrowsinessResult } from "~/lib/fatigue";
+
+const MODEL_PATH = "/mediapipe/face_landmarker.task";
+const UI_UPDATE_MS = 100; // tracking runs every frame; React only re-renders ~10x a second
+
+/** Loads MediaPipe once per page. GPU first, CPU if the browser can't do WebGL. */
+let landmarkerPromise: Promise<FaceLandmarker> | null = null;
+function loadLandmarker() {
+  landmarkerPromise ??= (async () => {
+    const { FaceLandmarker } = await import("@mediapipe/tasks-vision");
+    const create = (delegate: "GPU" | "CPU") =>
+      FaceLandmarker.createFromOptions(
+        { wasmLoaderPath, wasmBinaryPath },
+        {
+          baseOptions: { modelAssetPath: MODEL_PATH, delegate },
+          runningMode: "VIDEO",
+          numFaces: 1,
+          outputFaceBlendshapes: true,
+          outputFacialTransformationMatrixes: true,
+        },
+      );
+    try {
+      return await create("GPU");
+    } catch {
+      return await create("CPU");
+    }
+  })();
+  landmarkerPromise.catch(() => {
+    landmarkerPromise = null; // allow a retry on the next Start
+  });
+  return landmarkerPromise;
+}
 
 export function useDrowsinessMonitor() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const requestRef = useRef<AbortController | null>(null);
-  const sessionRef = useRef<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const beepIntervalRef = useRef<number | null>(null);
   const voiceRequestRef = useRef<AbortController | null>(null);
   const voiceSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [landmarker, setLandmarker] = useState<FaceLandmarker | null>(null);
   const [monitoring, setMonitoring] = useState(false);
   const [result, setResult] = useState<DrowsinessResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,118 +67,60 @@ export function useDrowsinessMonitor() {
     voiceSourceRef.current = null;
   }, []);
 
+  // Every new video frame: MediaPipe face landmarks -> eye closure + head pitch -> fatigue.
   useEffect(() => {
-    if (!monitoring || !sessionId) return;
+    if (!monitoring || !landmarker) return;
 
-    const activeSessionId = sessionId;
-    let active = true;
-    let timer: number | undefined;
+    const tracker = new FatigueTracker();
+    let frame = 0;
+    let lastVideoTime = -1;
+    let lastUiUpdate = 0;
+    let lastStatus: DrowsinessResult["status"] | null = null;
 
-    async function analyzeNextFrame() {
+    const loop = () => {
+      frame = requestAnimationFrame(loop);
       const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!active || !video || !canvas || video.videoWidth === 0) {
-        if (active) timer = window.setTimeout(analyzeNextFrame, pollIntervalMs);
-        return;
-      }
+      if (!video || video.readyState < 2 || video.currentTime === lastVideoTime) return;
+      lastVideoTime = video.currentTime;
 
+      const now = performance.now();
       try {
-        const scale = Math.min(1, 640 / video.videoWidth);
-        canvas.width = Math.round(video.videoWidth * scale);
-        canvas.height = Math.round(video.videoHeight * scale);
-        const context = canvas.getContext("2d");
-        if (!context) throw new Error("This browser could not prepare a camera frame.");
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        const image = await new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob(
-            (blob) =>
-              blob
-                ? resolve(blob)
-                : reject(new Error("Could not capture a camera frame.")),
-            "image/jpeg",
-            0.8,
-          );
+        const detection = landmarker.detectForVideo(video, now);
+        const blink = detection.faceBlendshapes[0]?.categories;
+        const matrix = detection.facialTransformationMatrixes[0];
+        const score = (name: string) => blink?.find((c) => c.categoryName === name)?.score ?? 0;
+        const next = tracker.update({
+          t: now / 1000,
+          closure: blink ? (score("eyeBlinkLeft") + score("eyeBlinkRight")) / 2 : null,
+          pitchDeg: blink && matrix ? pitchFromMatrix(matrix.data) : null,
         });
-        const form = new FormData();
-        form.append("session_id", activeSessionId);
-        form.append("frame", image, "camera-frame.jpg");
-
-        const controller = new AbortController();
-        requestRef.current = controller;
-        const response = await fetch("/api/drowsiness/frame", {
-          method: "POST",
-          body: form,
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          if (response.status === 502 || response.status === 503) {
-            throw new Error(
-              "The drowsiness backend is not responding. Start the backend server, then try again.",
-            );
-          }
-          const body = response.headers
-            .get("content-type")
-            ?.includes("application/json")
-            ? ((await response.json()) as { detail?: string })
-            : null;
-          throw new Error(
-            body?.detail ?? `Drowsiness analysis failed (HTTP ${response.status}).`,
-          );
+        // Throttle re-renders, but show a status change (e.g. an alarm) immediately.
+        if (now - lastUiUpdate >= UI_UPDATE_MS || next.status !== lastStatus) {
+          lastUiUpdate = now;
+          lastStatus = next.status;
+          setResult(next);
         }
-        const payload = (await response.json()) as
-          | DrowsinessResult
-          | { detail: string };
-        if ("detail" in payload) {
-          throw new Error(payload.detail);
-        }
-        if (active) setResult(payload);
       } catch (caught) {
-        if (!active || (caught instanceof Error && caught.name === "AbortError")) {
-          return;
-        }
-        setError(
-          caught instanceof TypeError
-            ? "Could not reach the drowsiness backend. Check that it is running and refresh this page."
-            : caught instanceof Error
-              ? caught.message
-              : "Drowsiness analysis failed.",
-        );
+        cancelAnimationFrame(frame);
+        setError(caught instanceof Error ? caught.message : "Face tracking stopped unexpectedly.");
         setMonitoring(false);
         stopBeepLoop();
         stopVoiceAlert();
         streamRef.current?.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
-
-      if (active) timer = window.setTimeout(analyzeNextFrame, pollIntervalMs);
-    }
-
-    void analyzeNextFrame();
-    return () => {
-      active = false;
-      if (timer !== undefined) window.clearTimeout(timer);
-      requestRef.current?.abort();
     };
-  }, [monitoring, sessionId, stopBeepLoop, stopVoiceAlert]);
+    frame = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(frame);
+  }, [monitoring, landmarker, stopBeepLoop, stopVoiceAlert]);
 
   useEffect(
     () => () => {
-      requestRef.current?.abort();
       streamRef.current?.getTracks().forEach((track) => track.stop());
       stopBeepLoop();
       stopVoiceAlert();
       if (audioContextRef.current && audioContextRef.current.state !== "closed") {
         void audioContextRef.current.close();
-      }
-      const session = sessionRef.current;
-      if (session) {
-        void fetch(
-          `/api/drowsiness/session/${encodeURIComponent(session)}`,
-          { method: "DELETE", keepalive: true },
-        ).catch((caught: unknown) => {
-          console.error("Could not clear the drowsiness session.", caught);
-        });
       }
     },
     [stopBeepLoop, stopVoiceAlert],
@@ -190,10 +156,8 @@ export function useDrowsinessMonitor() {
       videoRef.current.srcObject = stream;
       await videoRef.current.play();
 
-      const session = crypto.randomUUID();
-      sessionRef.current = session;
-      setSessionId(session);
       setMonitoring(true);
+      setLandmarker(await loadLandmarker());
     } catch (caught) {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
@@ -202,47 +166,25 @@ export function useDrowsinessMonitor() {
           ? caught.message
           : "Camera access was denied or could not be started.",
       );
+      setMonitoring(false);
     }
   }, []);
 
-  const stopMonitoring = useCallback(async () => {
+  const stopMonitoring = useCallback(() => {
     setMonitoring(false);
-    requestRef.current?.abort();
     stopBeepLoop();
     stopVoiceAlert();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
-    const session = sessionRef.current;
-    sessionRef.current = null;
-    setSessionId(null);
-
-    if (session) {
-      try {
-        const response = await fetch(
-          `/api/drowsiness/session/${encodeURIComponent(session)}`,
-          { method: "DELETE" },
-        );
-        if (!response.ok) {
-          throw new Error("Could not clear the drowsiness session on the backend.");
-        }
-      } catch (caught) {
-        setError(
-          caught instanceof TypeError
-            ? "Could not reach the drowsiness backend to clear this session."
-            : caught instanceof Error
-              ? caught.message
-              : "Could not clear the session.",
-        );
-      }
-    }
   }, [stopBeepLoop, stopVoiceAlert]);
 
-  const status = result?.status ?? (monitoring ? "starting" : "stopped");
+  const status = result?.status ?? (monitoring ? (landmarker ? "starting" : "loading") : "stopped");
   const statusLabel: Record<string, string> = {
     alert: "Eyes open",
     drowsy: "Drowsiness detected",
     eyes_closed: "Eyes closed",
     no_face: "No face detected",
+    loading: "Loading face tracker",
     starting: "Starting monitor",
     stopped: "Monitor stopped",
   };
@@ -356,7 +298,6 @@ export function useDrowsinessMonitor() {
 
   return {
     videoRef,
-    canvasRef,
     monitoring,
     result,
     error,

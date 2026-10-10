@@ -9,6 +9,7 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "1.0.1",
     "@react-router/node": "^8.4.0",
     "@react-router/serve": "^8.4.0",
     "class-variance-authority": "^0.7.1",
