@@ -1,9 +1,14 @@
 import asyncio
 import contextlib
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from .drowsiness.detector import (
+    DrowsinessDetector,
+    InvalidFrameError,
+    ModelUnavailableError,
+)
 from .routing.graph import airport_graph
 from .routing.astar import astar
 
@@ -62,10 +67,13 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Hold Short Backend", lifespan=lifespan)
+drowsiness_detector = DrowsinessDetector()
+
+MAX_FRAME_BYTES = 5 * 1024 * 1024
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -78,6 +86,11 @@ app.add_middleware(
 @app.get("/")
 def home():
     return {"message": "Hold Short API Running"}
+
+
+@app.get("/api/health")
+def health_check():
+    return {"status": "ok"}
 
 
 @app.get("/api/state", response_model=SimulationState)
@@ -264,3 +277,37 @@ async def pause_simulation():
         "message": "Simulation paused",
         "time": world.sim.state.time
     }
+
+
+@app.post("/api/drowsiness/frame")
+def analyze_drowsiness_frame(
+    session_id: str = Form(min_length=1, max_length=128),
+    frame: UploadFile = File(...),
+):
+    try:
+        if frame.content_type not in {"image/jpeg", "image/png"}:
+            raise HTTPException(
+                status_code=415,
+                detail="Upload a JPEG or PNG camera frame.",
+            )
+
+        image_bytes = frame.file.read(MAX_FRAME_BYTES + 1)
+        if len(image_bytes) > MAX_FRAME_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Camera frames must be 5 MB or smaller.",
+            )
+
+        return drowsiness_detector.analyze(session_id, image_bytes)
+    except InvalidFrameError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ModelUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    finally:
+        frame.file.close()
+
+
+@app.delete("/api/drowsiness/session/{session_id}")
+def reset_drowsiness_session(session_id: str):
+    drowsiness_detector.reset(session_id)
+    return {"status": "reset"}
