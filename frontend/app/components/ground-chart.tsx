@@ -210,10 +210,12 @@ const Nodes = memo(function Nodes({
     <g>
       {chart.nodes.map((n) => {
         const hold = n.kind === "hold";
+        const crossing = n.kind === "crossing";
         const onFocus = (id: string | null) => id !== null && n.on.includes(id);
+        // Runway crossings are where incursions happen, so they show at every zoom.
         const visible = selectedTaxiway
           ? onFocus(selectedTaxiway) || onFocus(previewTaxiway)
-          : onFocus(previewTaxiway) || tier >= 2 || (tier >= 1 && hold);
+          : crossing || onFocus(previewTaxiway) || tier >= 2 || (tier >= 1 && hold);
         if (!visible && activeId !== n.id) return null;
         const active = activeId === n.id;
         return (
@@ -227,9 +229,13 @@ const Nodes = memo(function Nodes({
                 "pointer-events-none stroke-background",
                 active
                   ? "fill-beacon [r:calc(16px/var(--z))]"
-                  : hold
-                    ? "fill-taxiway [r:calc(11px/var(--z))]"
-                    : "fill-foreground [r:calc(8px/var(--z))]",
+                  : crossing
+                    ? "fill-destructive [r:calc(12px/var(--z))]"
+                    : hold
+                      ? "fill-taxiway [r:calc(11px/var(--z))]"
+                      : n.kind === "exit"
+                        ? "fill-runway [r:calc(8px/var(--z))]"
+                        : "fill-foreground [r:calc(8px/var(--z))]",
               )}
             />
           </g>

@@ -27,7 +27,7 @@ export type ChartNode = {
   name: string;
   x: number;
   y: number;
-  kind: "hold" | "intersection" | "end";
+  kind: "hold" | "crossing" | "exit" | "intersection" | "end";
   holdType: string | null;
   taxiways: string[];
   /** Every taxiway id this node sits on, including unnamed ones. */
@@ -40,38 +40,62 @@ export const chart = chartData as unknown as {
   runways: Runway[];
   taxiways: Taxiway[];
   nodes: ChartNode[];
-  /** Every graph node, including bends, in chart pixels. */
+  /** Every graph node in chart pixels. */
   positions: Record<string, Point>;
   /** Adjacency list from the backend graph. */
   graph: Record<string, string[]>;
+  /** Real curve of each edge, keyed "a|b" with a < b. */
+  edges: Record<string, Point[]>;
 };
 
 export const hasNode = (id: string) => id in chart.positions;
 
+/** The curve between two neighbouring nodes, in travel order. Straight line if unknown. */
+export function edgeLine(a: string, b: string): Point[] {
+  const forward = chart.edges[`${a}|${b}`];
+  if (forward) return forward;
+  const backward = chart.edges[`${b}|${a}`];
+  if (backward) return [...backward].reverse();
+  return [chart.positions[a], chart.positions[b]];
+}
+
+/** A route of node ids as one polyline that follows the taxiway curves. */
+export function routeLine(route: string[]): Point[] {
+  const ids = route.filter(hasNode);
+  if (ids.length < 2) return ids.map((id) => chart.positions[id]);
+  return ids.slice(1).flatMap((id, i) => {
+    const line = edgeLine(ids[i], id);
+    return i === 0 ? line : line.slice(1); // shared node appears once
+  });
+}
+
+export const lineLength = (pts: Point[]) =>
+  pts.slice(1).reduce((sum, p, i) => sum + Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]), 0);
+
 /**
- * Where a vehicle is drawn: `progress` (0 to 1) of the way along the route's total length.
- * Heading is in degrees clockwise from up (chart north).
+ * Where a vehicle is drawn: `progress` (0 to 1) of the way along the route's total length,
+ * following the real taxiway curves. Heading is in degrees clockwise from up (chart north).
  */
 export function routePoint(route: string[], progress: number, fallback?: string) {
-  const pts = route.filter(hasNode).map((id) => chart.positions[id]);
+  const pts = routeLine(route);
   if (pts.length < 2) {
     const p = pts[0] ?? (fallback && hasNode(fallback) ? chart.positions[fallback] : null);
     return p ? { x: p[0], y: p[1], heading: null } : null;
   }
-  const lengths = pts.slice(1).map((p, i) => Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]));
-  let remaining = Math.min(Math.max(progress, 0), 1) * lengths.reduce((a, b) => a + b, 0);
-  for (let i = 0; i < lengths.length; i++) {
+  let remaining = Math.min(Math.max(progress, 0), 1) * lineLength(pts);
+  for (let i = 0; i < pts.length - 1; i++) {
     const [ax, ay] = pts[i];
     const [bx, by] = pts[i + 1];
-    if (remaining <= lengths[i] || i === lengths.length - 1) {
-      const t = lengths[i] ? Math.min(remaining / lengths[i], 1) : 0;
+    const len = Math.hypot(bx - ax, by - ay);
+    if (remaining <= len || i === pts.length - 2) {
+      const t = len ? Math.min(remaining / len, 1) : 0;
       return {
         x: ax + (bx - ax) * t,
         y: ay + (by - ay) * t,
         heading: (Math.atan2(bx - ax, -(by - ay)) * 180) / Math.PI,
       };
     }
-    remaining -= lengths[i];
+    remaining -= len;
   }
   return null;
 }
@@ -83,12 +107,16 @@ const nodeInfo = new Map(chart.nodes.map((n) => [n.id, n]));
  * (breadth-first) to the closest node that does. Falls back to the raw id.
  */
 export function placeName(id: string) {
+  // Runway ends from the backend graph ("rwy_22R") name themselves.
+  if (id.startsWith("rwy_")) return `runway ${id.slice(4)}`;
   const seen = new Set([id]);
   let frontier = [id];
   for (let depth = 0; depth < 25 && frontier.length; depth++) {
     for (const node of frontier) {
-      const names = nodeInfo.get(node)?.taxiways;
-      if (names?.length) return `taxiway ${names.join("/")}`;
+      const names = nodeInfo.get(node)?.taxiways ?? [];
+      const runway = names.find((t) => t.startsWith("RWY "));
+      if (runway) return `runway ${runway.slice(4)}`;
+      if (names.length) return `taxiway ${names.join("/")}`;
     }
     frontier = frontier.flatMap((n) => chart.graph[n] ?? []).filter((n) => !seen.has(n) && seen.add(n));
   }
@@ -170,6 +198,22 @@ export function describe(target: HoverTarget): { eyebrow: string; title: string;
           eyebrow: "Hold-short point",
           title: where ? `Stop line ${where}` : "Stop line",
           body: holdReasons[n.holdType ?? ""] ?? "A painted stop line. Planes wait here until cleared.",
+        };
+      }
+      if (n.kind === "crossing") {
+        const runway = n.taxiways.find((t) => t.startsWith("RWY"))?.replace("RWY ", "") ?? "a runway";
+        const taxiway = n.taxiways.find((t) => !t.startsWith("RWY"));
+        return {
+          eyebrow: "Runway crossing",
+          title: n.name,
+          body: `Where ${taxiway ? `taxiway ${taxiway}` : "a taxiway"} crosses runway ${runway}. Planes and vehicles need explicit permission to cross. This is where runway incursions happen.`,
+        };
+      }
+      if (n.kind === "exit") {
+        return {
+          eyebrow: "Runway exit",
+          title: n.name,
+          body: "Where landing planes turn off the runway onto a taxiway.",
         };
       }
       if (n.kind === "intersection") {
