@@ -27,8 +27,9 @@ M_PER_DEG_LAT = 111_320
 
 
 class Airport:
-    def __init__(self, icao="KEWR"):
+    def __init__(self, icao="KEWR", taxi_speed=TAXI_SPEED):
         self.icao = icao
+        self.taxi_speed = taxi_speed
         self.nodes, self.graph, self.geometry = load_saved_graph(icao, simple=True)
 
         lat0 = sum(n.lat for n in self.nodes.values()) / len(self.nodes)
@@ -40,7 +41,7 @@ class Airport:
             for k, n in self.nodes.items()
         }
 
-        step_m = TAXI_SPEED * DT
+        step_m = taxi_speed * DT
         self.steps = {
             u: {v: max(1, math.ceil(length / step_m)) for v, length in nbrs.items()}
             for u, nbrs in self.graph.items()
@@ -71,7 +72,7 @@ class Airport:
 
     def heuristic_steps(self, node, goal):
         """Straight-line lower bound on the steps from node to goal."""
-        return self.distance_m(node, goal) / (TAXI_SPEED * DT)
+        return self.distance_m(node, goal) / (self.taxi_speed * DT)
 
     def label(self, node):
         """Name for messages, e.g. 'A/RH'; ambiguous names get the node id appended."""
@@ -92,5 +93,5 @@ class Airport:
 
 
 @functools.lru_cache
-def get_airport(icao="KEWR"):
-    return Airport(icao)
+def get_airport(icao="KEWR", taxi_speed=TAXI_SPEED):
+    return Airport(icao, taxi_speed)

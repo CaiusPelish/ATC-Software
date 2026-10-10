@@ -189,13 +189,21 @@ class RunwayGate:
     """edge_allowed hook: keeps taxiing aircraft off runways while they're in use.
 
     Each runway has busy windows in timesteps, e.g. an arrival from short final
-    until it has vacated. Entering a runway (or waiting on one) is allowed only
-    if the runway stays free until the aircraft can be clear again. Leaving a
-    runway is always allowed.
+    until it has vacated, or a departure's takeoff roll. Entering a runway (or
+    waiting on one) is allowed only if the runway stays free until the
+    aircraft can be clear again. Leaving a runway is always allowed.
+
+    Called directly it applies every window. for_aircraft(aid, departs_from)
+    gives one aircraft its own hook that ignores its own windows and, for a
+    departure, other takeoffs from its own runway: lining up while the
+    aircraft ahead rolls is normal; the takeoff order comes from its slot.
+    rolling_out=pair lets an arrival that starts its taxi still on the runway
+    it landed on keep moving along it to an exit (but not wait there), as
+    runway_conflicts does; the landing behind it was cleared knowing it would.
     """
 
-    def __init__(self, runways):
-        ap = get_airport()
+    def __init__(self, runways, airport=None):
+        ap = self.airport = airport or get_airport()
         self.runways = {r.pair: r for r in runways}
         self.windows = {pair: [] for pair in self.runways}
         self.on = {pair: on_runway_nodes(r) for pair, r in self.runways.items()}
@@ -206,11 +214,15 @@ class RunwayGate:
                     if edge_enters(r, u, v):
                         self._enters.setdefault((u, v), []).append(pair)
 
-    def add_window(self, pair, t0, t1, label=""):
-        self.windows[pair].append((t0, t1, label))
+    def add_window(self, pair, t0, t1, label="", kind="landing"):
+        self.windows[pair].append((t0, t1, label, kind))
 
-    def busy(self, pair, t0, t1):
-        return any(w0 < t1 and t0 < w1 for w0, w1, _ in self.windows[pair])
+    def busy(self, pair, t0, t1, aid=None, departs_from=None):
+        return any(
+            w0 < t1 and t0 < w1
+            for w0, w1, label, kind in self.windows[pair]
+            if label != aid and not (kind == "takeoff" and pair == departs_from)
+        )
 
     def runways_touched(self, u, v):
         """Runways the move u -> v (or a wait, u == v) puts the aircraft on."""
@@ -219,24 +231,35 @@ class RunwayGate:
             touched += self._enters.get((u, v), [])
         return touched
 
-    def __call__(self, u, v, t):
+    def allowed(self, u, v, t, aid=None, departs_from=None, rolling_out=None):
         pairs = self.runways_touched(u, v)
+        if rolling_out and u != v and u in self.on.get(rolling_out, ()):
+            pairs = [p for p in pairs if p != rolling_out]
         if not pairs:
             return True
-        ap = get_airport()
+        ap = self.airport
         d = 1 if u == v else ap.steps[u][v]
         # After this move the aircraft still needs its slowest way off the runway.
         clear = max(ap.steps[v].values()) if any(v in self.on[p] for p in pairs) else 0
-        return not any(self.busy(pair, t, t + d + clear) for pair in pairs)
+        return not any(self.busy(pair, t, t + d + clear, aid, departs_from) for pair in pairs)
+
+    def __call__(self, u, v, t):
+        return self.allowed(u, v, t)
+
+    def for_aircraft(self, aid, departs_from=None, rolling_out=None):
+        return lambda u, v, t: self.allowed(u, v, t, aid, departs_from, rolling_out)
 
 
-def runway_conflicts(gate, paths):
+def runway_conflicts(gate, paths, departs_from=None):
     """[(aid, pair, t)] for every step an aircraft is on a runway during one of its busy windows.
 
     An aircraft whose path starts on a runway (an arrival at its exit) is
-    still rolling out until it first leaves that runway, so that part is skipped.
+    still rolling out until it first leaves that runway, so that part is
+    skipped. departs_from {aid: pair} exempts departures lining up on their
+    own runway from other takeoff windows there, as RunwayGate.for_aircraft does.
     """
     ap = get_airport()
+    departs_from = departs_from or {}
     found = []
     for aid, path in paths.items():
         rolling_out = {pair for pair, nodes in gate.on.items() if path[0][0] in nodes}
@@ -251,8 +274,9 @@ def runway_conflicts(gate, paths):
                     px, py = pts[min(len(pts) - 1, round(k / max(1, t1 - t0) * (len(pts) - 1)))]
                     t = t0 + k
                     if r.on_runway_xy(px, py, margin=ZONE_M / 2) and any(
-                        w0 <= t < w1 and lbl != aid for w0, w1, lbl in gate.windows[pair]
+                        w0 <= t < w1 and lbl != aid
+                        and not (kind == "takeoff" and departs_from.get(aid) == pair)
+                        for w0, w1, lbl, kind in gate.windows[pair]
                     ):
                         found.append((aid, pair, t))
     return found
-

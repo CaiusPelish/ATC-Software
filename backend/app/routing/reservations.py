@@ -61,17 +61,21 @@ def path_occupancy(path):
     return node_times, edges
 
 
-def _edge_clash(aid, u, v, t0, t1, other, ou, ov, ot0, ot1):
+def _edge_clash(aid, u, v, t0, t1, other, ou, ov, ot0, ot1, follow_gap=FOLLOW_GAP):
     """ConflictInfo if traversing u->v over [t0, t1] clashes with other on ou->ov."""
     if (ou, ov) == (v, u) and t0 < ot1 and ot0 < t1:
         return ConflictInfo("edge_swap", aid, other, max(t0, ot0), min(t1, ot1), edge=(u, v))
-    if (ou, ov) == (u, v) and abs(t0 - ot0) < FOLLOW_GAP:
+    if (ou, ov) == (u, v) and abs(t0 - ot0) < follow_gap:
         return ConflictInfo("follow_gap", aid, other, t0, ot0, edge=(u, v))
     return None
 
 
 class ReservationTable:
-    def __init__(self):
+    """node_buffer and follow_gap (in steps) default to the airport-wide spacing."""
+
+    def __init__(self, node_buffer=NODE_BUFFER, follow_gap=FOLLOW_GAP):
+        self.node_buffer = node_buffer
+        self.follow_gap = follow_gap
         self._nodes = {}    # node -> {t: [aid, ...]}
         self._edges = {}    # frozenset{u, v} -> [(aid, u, v, t0, t1)]
         self._parked = {}   # node -> [(aid, t_from)]
@@ -117,12 +121,12 @@ class ReservationTable:
         """First reservation that stops `ignore` from being on node at t, or None."""
         at = self._nodes.get(node)
         if at:
-            for dt in range(-NODE_BUFFER, NODE_BUFFER + 1):
+            for dt in range(-self.node_buffer, self.node_buffer + 1):
                 for other in at.get(t + dt, ()):
                     if other != ignore:
                         return ConflictInfo("node_conflict", ignore, other, t, t + dt, node=node)
         for other, t_from in self._parked.get(node, ()):
-            if other != ignore and t >= t_from - NODE_BUFFER:
+            if other != ignore and t >= t_from - self.node_buffer:
                 return ConflictInfo("node_conflict", ignore, other, t, t_from, node=node, parked=True)
         return None
 
@@ -131,7 +135,7 @@ class ReservationTable:
         for other, ou, ov, ot0, ot1 in self._edges.get(frozenset((u, v)), ()):
             if other == ignore:
                 continue
-            clash = _edge_clash(ignore, u, v, t0, t1, other, ou, ov, ot0, ot1)
+            clash = _edge_clash(ignore, u, v, t0, t1, other, ou, ov, ot0, ot1, self.follow_gap)
             if clash:
                 return clash
         return None
@@ -143,37 +147,41 @@ class ReservationTable:
         times = [t for t, aids in self._nodes.get(node, {}).items() if any(a != ignore for a in aids)]
         return max(times, default=-1)
 
+    def reserved_times(self, node, ignore=None):
+        """Every t at which anyone but `ignore` is on node."""
+        return [t for t, aids in self._nodes.get(node, {}).items() if any(a != ignore for a in aids)]
+
     def parked_by(self, node, ignore=None):
         return next((a for a, _ in self._parked.get(node, ()) if a != ignore), None)
 
 
-def check_paths(paths, park_at_goal=True):
+def check_paths(paths, park_at_goal=True, node_buffer=NODE_BUFFER, follow_gap=FOLLOW_GAP):
     """Every conflict between any two paths, by brute force. Independent of ReservationTable."""
     occ = {aid: path_occupancy(p) for aid, p in paths.items()}
     ids = sorted(paths)
     conflicts = []
     for i, a in enumerate(ids):
         for b in ids[i + 1:]:
-            conflicts.extend(_pair_conflicts(a, b, paths, occ, park_at_goal))
+            conflicts.extend(_pair_conflicts(a, b, paths, occ, park_at_goal, node_buffer, follow_gap))
     return conflicts
 
 
-def _pair_conflicts(a, b, paths, occ, park_at_goal):
+def _pair_conflicts(a, b, paths, occ, park_at_goal, node_buffer, follow_gap):
     found = []
     (a_nodes, a_edges), (b_nodes, b_edges) = occ[a], occ[b]
     for node, t in a_nodes:
         for other_node, ot in b_nodes:
-            if node == other_node and abs(t - ot) <= NODE_BUFFER:
+            if node == other_node and abs(t - ot) <= node_buffer:
                 found.append(ConflictInfo("node_conflict", a, b, t, ot, node=node))
     if park_at_goal:
         for x, y, x_nodes in ((a, b, a_nodes), (b, a, b_nodes)):
             goal, t_from = paths[y][-1]
             for node, t in x_nodes:
-                if node == goal and t >= t_from - NODE_BUFFER:
+                if node == goal and t >= t_from - node_buffer:
                     found.append(ConflictInfo("node_conflict", x, y, t, t_from, node=node, parked=True))
     for u, v, t0, t1 in a_edges:
         for ou, ov, ot0, ot1 in b_edges:
-            clash = _edge_clash(a, u, v, t0, t1, b, ou, ov, ot0, ot1)
+            clash = _edge_clash(a, u, v, t0, t1, b, ou, ov, ot0, ot1, follow_gap)
             if clash:
                 found.append(clash)
     return found

@@ -29,6 +29,8 @@ class AircraftRequest:
     # Steps to hold at the goal before leaving the map (a departure's line-up
     # and takeoff roll); None parks there until the path is removed.
     goal_hold: int | None = None
+    # Stay at the goal until at least this step (e.g. a departure's takeoff slot).
+    hold_until: int | None = None
 
     def __post_init__(self):
         if self.weight_class not in WEIGHT_CLASSES:
@@ -53,12 +55,19 @@ class BatchResult:
         return max((p[-1][1] for p in self.paths.values()), default=0)
 
 
-def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, order=None,
-               max_delay_retries=6):
+def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, edge_allowed_for=None,
+               order=None, max_delay_retries=6, hold_starts=0):
     """Plan every request; returns a BatchResult. Mutates `reservations` if given.
 
     order(airport, requests) -> [aircraft ids] picks who goes first; defaults
-    to heuristic_order.
+    to heuristic_order. edge_allowed_for(request) -> edge_allowed gives each
+    aircraft its own hook (e.g. a runway gate that ignores its own roll);
+    otherwise edge_allowed is shared.
+
+    hold_starts=k reserves every aircraft's start node for k steps from its
+    ready time before anyone is planned. Without it, an aircraft planned late
+    can find its own starting spot taken by someone planned earlier, which
+    matters when planning order isn't arrival order (e.g. by takeoff slot).
     """
     reservations = reservations if reservations is not None else ReservationTable()
     by_id = {r.id: r for r in requests}
@@ -67,14 +76,25 @@ def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, order
         raise ValueError("order must return each request id exactly once")
 
     result = BatchResult(order=list(ids), reservations=reservations)
+    placeholder = {}
+    if hold_starts:
+        for r in requests:
+            placeholder[r.id] = f"{r.id}@start"
+            steps = [(r.start, r.ready_t + k) for k in range(hold_starts + 1)]
+            reservations.add_path(placeholder[r.id], steps, park_at_goal=False)
     for aid in ids:
         r = by_id[aid]
-        planned = plan_one(airport, r, reservations, edge_allowed=edge_allowed,
+        if aid in placeholder:
+            reservations.remove_path(placeholder.pop(aid))
+        gate = edge_allowed_for(r) if edge_allowed_for else edge_allowed
+        planned = plan_one(airport, r, reservations, edge_allowed=gate,
                            max_delay_retries=max_delay_retries)
         if planned.ok:
-            reservations.add_path(aid, planned.path, park_at_goal=r.goal_hold is None)
+            reservations.add_path(aid, planned.path, park_at_goal=r.goal_hold is None and r.hold_until is None)
             result.paths[aid] = planned.path
             ideal = r.ready_t + free_flow_steps(airport, r.start, r.goal) + (r.goal_hold or 0)
+            if r.hold_until is not None:
+                ideal = max(ideal, r.hold_until)
             result.delays[aid] = planned.path[-1][1] - ideal
         else:
             result.failures[aid] = planned.reason
@@ -91,7 +111,8 @@ def plan_one(airport, request, reservations, *, edge_allowed=None, max_delay_ret
         horizon = int(4 * airport.heuristic_steps(r.start, r.goal)) + spacetime_astar.HORIZON_SLACK * (k + 1)
         planned = spacetime_astar.plan(
             airport, r.id, r.start, r.goal, t_start, reservations,
-            edge_allowed=edge_allowed, max_t=t_start + horizon, goal_hold=r.goal_hold,
+            edge_allowed=edge_allowed, max_t=max(t_start + horizon, (r.hold_until or 0) + horizon),
+            goal_hold=r.goal_hold, hold_until=r.hold_until,
         )
         if planned.ok:
             return planned
@@ -122,8 +143,9 @@ def replan(airport, request, reservations, t_now, *, new_goal=None, edge_allowed
 
     reservations.remove_path(request.id)
     planned = spacetime_astar.plan(airport, request.id, node, goal, t_from, reservations,
-                                   edge_allowed=edge_allowed, goal_hold=request.goal_hold)
-    park = request.goal_hold is None
+                                   edge_allowed=edge_allowed, goal_hold=request.goal_hold,
+                                   hold_until=request.hold_until)
+    park = request.goal_hold is None and request.hold_until is None
     if planned.ok:
         planned.path = done + planned.path
         reservations.add_path(request.id, planned.path, park_at_goal=park)

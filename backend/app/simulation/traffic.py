@@ -43,8 +43,8 @@ def read_traffic(csv_path=TRAFFIC_CSV):
     return pd.read_csv(csv_path)
 
 
-def taxi_points(flight):
-    """GPS points of one flight from first appearance until it lines up, as an (n, 2) [lat, lon] array.
+def taxi_rows(flight):
+    """Rows of one departing flight from first appearance until it lines up.
 
     By the time speed passes TAKEOFF_ROLL_SPEED the plane is already well down
     the runway, so the taxi ends at the last stop before that.
@@ -55,7 +55,32 @@ def taxi_points(flight):
     stopped = flight.index[(flight.index < end) & (flight["Speed"] <= STOPPED_SPEED)]
     if len(rolling) and len(stopped):
         end = stopped[-1] + 1
-    return flight.loc[: end - 1, ["Lat", "Lon"]].to_numpy()
+    return flight.loc[: end - 1]
+
+
+def taxi_points(flight):
+    """GPS points of one flight from first appearance until it lines up, as an (n, 2) [lat, lon] array."""
+    return taxi_rows(flight)[["Lat", "Lon"]].to_numpy()
+
+
+def arrival_taxi_rows(flight):
+    """Rows of one arriving flight from the end of its landing roll to its last ground point.
+
+    Raises NotEnoughHistory if the flight isn't an arrival with a taxi in.
+    """
+    flight = flight.sort_values("Frame")
+    if flight.empty or (flight["Type"] != 0).all():
+        raise NotEnoughHistory("is not an aircraft")
+    if flight.iloc[0]["Altitude"] <= GROUND_ALTITUDE_FT:
+        raise NotEnoughHistory("is on the ground when first seen, so it isn't an arrival")
+    ground = flight[flight["Altitude"] <= GROUND_ALTITUDE_FT]
+    rolling = ground.index[ground["Speed"] > TAKEOFF_ROLL_SPEED]
+    if not len(rolling):
+        raise NotEnoughHistory("never lands in the recording")
+    taxi = ground.loc[rolling[-1]:].iloc[1:]
+    if len(taxi) < MIN_TAXI_SECONDS:
+        raise NotEnoughHistory(f"has only {len(taxi)} s of taxi after landing (need {MIN_TAXI_SECONDS} s)")
+    return taxi
 
 
 def runway_number(flight):
