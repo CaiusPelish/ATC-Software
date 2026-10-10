@@ -1,87 +1,51 @@
-# Welcome to React Router!
+# Hold Short frontend
 
-A modern, production-ready template for building full-stack React applications using React Router.
+The frontend provides the airport ground-control simulator and opt-in
+drowsiness monitor.
 
-[![Open in StackBlitz](https://developer.stackblitz.com/img/open_in_stackblitz.svg)](https://stackblitz.com/github/remix-run/react-router-templates/tree/main/default)
+## Run locally
 
-## Features
-
-- 🚀 Server-side rendering
-- ⚡️ Hot Module Replacement (HMR)
-- 📦 Asset bundling and optimization
-- 🔄 Data loading and mutations
-- 🔒 TypeScript by default
-- 🎉 TailwindCSS for styling
-- 📖 [React Router docs](https://reactrouter.com/)
-
-## Getting Started
-
-### Installation
-
-Install the dependencies:
+Install dependencies and start the development server:
 
 ```bash
 npm install
-```
-
-### Development
-
-Start the development server with HMR:
-
-```bash
 npm run dev
 ```
 
-Your application will be available at `http://localhost:5173`.
+The app runs at <http://localhost:5173>. The FastAPI backend runs separately;
+see [the backend README](../backend/README.md). The dev server proxies browser
+`/api` requests to `http://127.0.0.1:8000` by default. Set `VITE_BACKEND_URL`
+to change that proxy target, then restart the frontend dev server.
 
-## Building for Production
+## Main pages
 
-Create a production build:
+- `/` — Home, with direct links to the simulator and drowsiness monitor.
+- `/sim` — Airport ground simulation.
+- `/drowsiness` — Webcam drowsiness monitoring.
+
+## Drowsiness alert sounds
+
+Start monitoring with sound enabled to allow the browser to play audio. When
+the backend raises its drowsiness alarm, the browser immediately plays a
+two-tone beep and repeats it every five seconds while the alarm stays active.
+An ElevenLabs voice reminder is generated once when the alarm first activates.
+Use the **Sound on/off** control to mute or restore both alerts. Beeps continue
+to work when voice alerts are not configured.
+
+Configure voice alerts in the server environment (never expose these values as
+`VITE_` variables):
 
 ```bash
-npm run build
+ELEVENLABS_API_KEY=your_api_key
+ELEVENLABS_VOICE_ID=your_voice_id
 ```
 
-## Deployment
+The frontend server proxies a fixed warning message to ElevenLabs, keeping the
+API key out of the browser. Without these variables, the monitor displays a
+configuration message and still plays the browser-generated beeps.
+The same live monitor and alert behavior is available in the corner dock on
+the `/sim` page. For local development, the frontend server loads these values
+from `frontend/.env`; restart `npm run dev` after changing them. Provider errors
+are logged by the frontend server without logging the API key.
 
-### Docker Deployment
-
-To build and run using Docker:
-
-```bash
-docker build -t my-app .
-
-# Run the container
-docker run -p 3000:3000 my-app
-```
-
-The containerized application can be deployed to any platform that supports Docker, including:
-
-- AWS ECS
-- Google Cloud Run
-- Azure Container Apps
-- Digital Ocean App Platform
-- Fly.io
-- Railway
-
-### DIY Deployment
-
-If you're familiar with deploying Node applications, the built-in app server is production-ready.
-
-Make sure to deploy the output of `npm run build`
-
-```
-├── package.json
-├── package-lock.json (or pnpm-lock.yaml, or bun.lockb)
-├── build/
-│   ├── client/    # Static assets
-│   └── server/    # Server-side code
-```
-
-## Styling
-
-This template comes with [Tailwind CSS](https://tailwindcss.com/) already configured for a simple default starting experience. You can use whatever CSS framework you prefer.
-
----
-
-Built with ❤️ using React Router.
+Build the production app with `npm run build`.
