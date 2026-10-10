@@ -13,8 +13,9 @@ npm run dev
 ```
 
 The app runs at <http://localhost:5173>. The FastAPI backend runs separately;
-see [the backend README](../backend/README.md). Set `VITE_BACKEND_URL` if the
-backend is not available at `http://127.0.0.1:8000`.
+see [the backend README](../backend/README.md). The dev server proxies browser
+`/api` requests to `http://127.0.0.1:8000` by default. Set `VITE_BACKEND_URL`
+to change that proxy target, then restart the frontend dev server.
 
 ## Main pages
 
@@ -25,9 +26,26 @@ backend is not available at `http://127.0.0.1:8000`.
 ## Drowsiness alert sounds
 
 Start monitoring with sound enabled to allow the browser to play audio. When
-the backend raises its drowsiness alarm, the browser plays a two-tone beep and
-repeats it every five seconds while the alarm stays active. Use the **Sound
-on/off** control to mute or restore the alert. Sounds are generated in the
-browser and do not require an audio service or API key.
+the backend raises its drowsiness alarm, the browser immediately plays a
+two-tone beep and repeats it every five seconds while the alarm stays active.
+An ElevenLabs voice reminder is generated once when the alarm first activates.
+Use the **Sound on/off** control to mute or restore both alerts. Beeps continue
+to work when voice alerts are not configured.
+
+Configure voice alerts in the server environment (never expose these values as
+`VITE_` variables):
+
+```bash
+ELEVENLABS_API_KEY=your_api_key
+ELEVENLABS_VOICE_ID=your_voice_id
+```
+
+The frontend server proxies a fixed warning message to ElevenLabs, keeping the
+API key out of the browser. Without these variables, the monitor displays a
+configuration message and still plays the browser-generated beeps.
+The same live monitor and alert behavior is available in the corner dock on
+the `/sim` page. For local development, the frontend server loads these values
+from `frontend/.env`; restart `npm run dev` after changing them. Provider errors
+are logged by the frontend server without logging the API key.
 
 Build the production app with `npm run build`.

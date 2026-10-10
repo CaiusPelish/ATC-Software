@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import type { Route } from "./+types/drowsiness";
 import { Link } from "react-router";
 import {
@@ -18,19 +17,7 @@ import {
 } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
-
-type DrowsinessResult = {
-  status: "alert" | "eyes_closed" | "drowsy" | "no_face";
-  face_detected: boolean;
-  eyes_closed: boolean;
-  closed_probability: number;
-  closed_duration: number;
-  perclos: number;
-  alarm: boolean;
-};
-
-const backendUrl = import.meta.env.VITE_BACKEND_URL ?? "http://127.0.0.1:8000";
-const pollIntervalMs = 1000;
+import { useDrowsinessMonitor } from "~/hooks/use-drowsiness-monitor";
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -43,241 +30,21 @@ export function meta({}: Route.MetaArgs) {
 }
 
 export default function DrowsinessMonitorPage() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const requestRef = useRef<AbortController | null>(null);
-  const sessionRef = useRef<string | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [monitoring, setMonitoring] = useState(false);
-  const [result, setResult] = useState<DrowsinessResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [soundEnabled, setSoundEnabled] = useState(true);
-  const [soundError, setSoundError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!monitoring || !sessionId) return;
-
-    const activeSessionId = sessionId;
-    let active = true;
-    let timer: number | undefined;
-
-    async function analyzeNextFrame() {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!active || !video || !canvas || video.videoWidth === 0) {
-        if (active) timer = window.setTimeout(analyzeNextFrame, pollIntervalMs);
-        return;
-      }
-
-      try {
-        const scale = Math.min(1, 640 / video.videoWidth);
-        canvas.width = Math.round(video.videoWidth * scale);
-        canvas.height = Math.round(video.videoHeight * scale);
-        const context = canvas.getContext("2d");
-        if (!context) throw new Error("This browser could not prepare a camera frame.");
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        const image = await new Promise<Blob>((resolve, reject) => {
-          canvas.toBlob(
-            (blob) =>
-              blob
-                ? resolve(blob)
-                : reject(new Error("Could not capture a camera frame.")),
-            "image/jpeg",
-            0.8,
-          );
-        });
-        const form = new FormData();
-        form.append("session_id", activeSessionId);
-        form.append("frame", image, "camera-frame.jpg");
-
-        const controller = new AbortController();
-        requestRef.current = controller;
-        const response = await fetch(`${backendUrl}/api/drowsiness/frame`, {
-          method: "POST",
-          body: form,
-          signal: controller.signal,
-        });
-        const payload = (await response.json()) as
-          | DrowsinessResult
-          | { detail: string };
-        if (!response.ok || "detail" in payload) {
-          throw new Error(
-            "detail" in payload ? payload.detail : "Drowsiness analysis failed.",
-          );
-        }
-        if (active) setResult(payload);
-      } catch (caught) {
-        if (!active || (caught instanceof Error && caught.name === "AbortError")) {
-          return;
-        }
-        setError(
-          caught instanceof Error ? caught.message : "Drowsiness analysis failed.",
-        );
-        setMonitoring(false);
-        streamRef.current?.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-      }
-
-      if (active) timer = window.setTimeout(analyzeNextFrame, pollIntervalMs);
-    }
-
-    void analyzeNextFrame();
-    return () => {
-      active = false;
-      if (timer !== undefined) window.clearTimeout(timer);
-      requestRef.current?.abort();
-    };
-  }, [monitoring, sessionId]);
-
-  useEffect(
-    () => () => {
-      requestRef.current?.abort();
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      if (audioContextRef.current && audioContextRef.current.state !== "closed") {
-        void audioContextRef.current?.close();
-      }
-      const session = sessionRef.current;
-      if (session) {
-        void fetch(
-          `${backendUrl}/api/drowsiness/session/${encodeURIComponent(session)}`,
-          { method: "DELETE", keepalive: true },
-        ).catch((caught: unknown) => {
-          console.error("Could not clear the drowsiness session.", caught);
-        });
-      }
-    },
-    [],
-  );
-
-  async function startMonitoring() {
-    setError(null);
-    setSoundError(null);
-    setResult(null);
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setError("Camera access is unavailable. Use HTTPS or open the app on localhost.");
-      return;
-    }
-
-    try {
-      if (!audioContextRef.current || audioContextRef.current.state === "closed") {
-        audioContextRef.current = new AudioContext();
-      }
-      await audioContextRef.current.resume();
-    } catch (caught) {
-      setSoundError(
-        caught instanceof Error
-          ? "Audio could not be enabled. Check your browser audio settings."
-          : "Audio is unavailable in this browser.",
-      );
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
-      });
-      streamRef.current = stream;
-      if (!videoRef.current) throw new Error("The camera preview could not be started.");
-      videoRef.current.srcObject = stream;
-      await videoRef.current.play();
-
-      const session = crypto.randomUUID();
-      sessionRef.current = session;
-      setSessionId(session);
-      setMonitoring(true);
-    } catch (caught) {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "Camera access was denied or could not be started.",
-      );
-    }
-  }
-
-  async function stopMonitoring() {
-    setMonitoring(false);
-    requestRef.current?.abort();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    const session = sessionRef.current;
-    sessionRef.current = null;
-    setSessionId(null);
-
-    if (session) {
-      try {
-        const response = await fetch(
-          `${backendUrl}/api/drowsiness/session/${encodeURIComponent(session)}`,
-          { method: "DELETE" },
-        );
-        if (!response.ok) {
-          throw new Error("Could not clear the drowsiness session on the backend.");
-        }
-      } catch (caught) {
-        setError(
-          caught instanceof Error ? caught.message : "Could not clear the session.",
-        );
-      }
-    }
-  }
-
-  const status = result?.status ?? (monitoring ? "starting" : "stopped");
-  const statusLabel: Record<string, string> = {
-    alert: "Eyes open",
-    drowsy: "Drowsiness detected",
-    eyes_closed: "Eyes closed",
-    no_face: "No face detected",
-    starting: "Starting monitor",
-    stopped: "Monitor stopped",
-  };
-  const alarming = monitoring && result?.alarm === true;
-
-  useEffect(() => {
-    const audioContext = audioContextRef.current;
-    if (!monitoring || !alarming || !soundEnabled || !audioContext) return;
-
-    let cancelled = false;
-    let interval: number | undefined;
-    const playAlarmBeep = () => {
-      const now = audioContext.currentTime;
-      for (const [index, frequency] of [880, 1046].entries()) {
-        const start = now + index * 0.2;
-        const oscillator = audioContext.createOscillator();
-        const gain = audioContext.createGain();
-        oscillator.type = "sine";
-        oscillator.frequency.value = frequency;
-        gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(0.16, start + 0.025);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
-        oscillator.connect(gain);
-        gain.connect(audioContext.destination);
-        oscillator.start(start);
-        oscillator.stop(start + 0.18);
-      }
-    };
-
-    void audioContext
-      .resume()
-      .then(() => {
-        if (cancelled) return;
-        playAlarmBeep();
-        interval = window.setInterval(playAlarmBeep, 5000);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSoundError("Alarm sound could not play. Check your browser audio settings.");
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      if (interval !== undefined) window.clearInterval(interval);
-    };
-  }, [alarming, monitoring, soundEnabled]);
+  const {
+    videoRef,
+    canvasRef,
+    monitoring,
+    result,
+    error,
+    soundEnabled,
+    setSoundEnabled,
+    soundError,
+    startMonitoring,
+    stopMonitoring,
+    status,
+    statusLabel,
+    alarming,
+  } = useDrowsinessMonitor();
 
   return (
     <main className="drowsy-page">
@@ -421,7 +188,7 @@ export default function DrowsinessMonitorPage() {
                 </div>
                 <div className={`sound-notice ${soundError ? "sound-notice-error" : ""}`}>
                   {soundError ? <VolumeX size={15} /> : soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
-                  <span>{soundError ?? (soundEnabled ? "Two-tone alert repeats every 5 seconds while drowsy." : "Sound alerts are muted.")}</span>
+                  <span>{soundError ?? (soundEnabled ? "Two-tone beep repeats every 5 seconds; ElevenLabs speaks when drowsiness is first detected." : "Sound and voice alerts are muted.")}</span>
                 </div>
                 {error && (
                   <p role="alert" className="drowsy-error">

@@ -16,7 +16,8 @@ The API is available at <http://localhost:8000>, with interactive API
 documentation at <http://localhost:8000/docs>.
 
 The frontend development server runs separately from `frontend/` on port 5173
-and connects to this API on port 8000.
+and proxies browser `/api` requests to this API on port 8000. Set
+`VITE_BACKEND_URL` in the frontend environment to change the proxy target.
 
 ## Drowsiness monitor
 

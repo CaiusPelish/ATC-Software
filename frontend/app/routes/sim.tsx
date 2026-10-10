@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { ArrowLeft, Eye } from "lucide-react";
 
 import type { Route } from "./+types/sim";
+import { DrowsinessMonitorDock } from "~/components/drowsiness-monitor-dock";
 import { GroundChart } from "~/components/ground-chart";
 import { LoadingScreen } from "~/components/loading-screen";
 import { Badge } from "~/components/ui/badge";
@@ -72,6 +73,8 @@ export default function Sim() {
           </Link>
         </Button>
       </header>
+
+      <DrowsinessMonitorDock />
 
       <Card className="pointer-events-none absolute bottom-4 left-4 gap-0 border-border bg-scrim py-3 backdrop-blur-md">
         <CardContent className="flex flex-col gap-2 px-4">

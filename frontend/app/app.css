@@ -113,6 +113,7 @@
 
 .drowsy-page {
   min-height: 100svh;
+  font-size: 14px;
   background:
     radial-gradient(ellipse at 88% 0%, oklch(0.28 0.06 220 / 35%), transparent 38rem),
     radial-gradient(ellipse at 0% 48%, oklch(0.24 0.04 252 / 48%), transparent 46rem),
@@ -152,7 +153,7 @@
 .drowsy-title p {
   margin: 5px 0 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .drowsy-kicker,
@@ -162,7 +163,7 @@
   gap: 7px;
   color: oklch(0.75 0.035 230);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 550;
   letter-spacing: 0.13em;
 }
@@ -250,7 +251,7 @@
   border-radius: 999px;
   background: oklch(0.21 0.025 255);
   color: oklch(0.79 0.025 245);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -280,7 +281,7 @@
 .drowsy-overview > p {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.6;
 }
 
@@ -319,7 +320,7 @@
 
 .panel-kicker {
   color: oklch(0.71 0.03 240);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .panel-kicker svg {
@@ -329,7 +330,7 @@
 .camera-card-heading h2 {
   margin: 8px 0 0;
   color: var(--foreground);
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 650;
   letter-spacing: -0.02em;
 }
@@ -337,7 +338,7 @@
 .camera-card-heading p {
   margin: 5px 0 0;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .camera-state {
@@ -350,7 +351,7 @@
   background: oklch(0.17 0.02 255 / 70%);
   color: oklch(0.67 0.02 250);
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 0.08em;
 }
 
@@ -427,13 +428,13 @@
 
 .camera-placeholder strong {
   color: oklch(0.9 0.01 250);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .camera-placeholder > span {
   color: oklch(0.68 0.02 250);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .camera-live-badge {
@@ -448,7 +449,7 @@
   border-radius: 6px;
   background: oklch(0.12 0.02 255 / 85%);
   color: oklch(0.93 0.005 250);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   backdrop-filter: blur(8px);
 }
@@ -515,7 +516,7 @@
   bottom: 11px;
   color: oklch(0.85 0.015 250 / 76%);
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 0.08em;
   text-shadow: 0 1px 5px #000;
 }
@@ -527,7 +528,7 @@
   gap: 12px;
   padding: 12px 2px 0;
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .camera-footnote span {
@@ -569,7 +570,7 @@
 .assessment-header [data-slot="card-title"],
 .interpretation-header [data-slot="card-title"] {
   color: var(--foreground);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 650;
 }
 
@@ -605,7 +606,7 @@
   border-radius: 8px;
   background: oklch(0.75 0.16 150 / 7%);
   color: oklch(0.83 0.08 155);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -647,13 +648,13 @@
 
 .metric-label-row > span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .metric-label-row > strong {
   color: oklch(0.93 0.01 250);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 550;
   font-variant-numeric: tabular-nums;
 }
@@ -686,7 +687,7 @@
   border-radius: 7px;
   background: oklch(0.17 0.02 255 / 70%);
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -715,7 +716,7 @@
   border-radius: 7px;
   background: oklch(0.65 0.22 25 / 9%);
   color: oklch(0.86 0.1 25);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -749,13 +750,13 @@
 }
 
 .interpretation-header [data-slot="card-title"] {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .interpretation-header p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .interpretation-content {
@@ -771,13 +772,13 @@
   gap: 9px;
   border-top: 1px solid oklch(1 0 0 / 6%);
   color: oklch(0.8 0.015 250);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .interpretation-index {
   color: oklch(0.59 0.025 250);
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .interpretation-content svg {
@@ -815,13 +816,13 @@
 
 .privacy-copy strong {
   color: oklch(0.89 0.01 250);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
 }
 
 .privacy-copy span {
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -837,7 +838,7 @@
   gap: 7px;
   margin-top: 14px;
   color: oklch(0.65 0.02 250);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -927,12 +928,12 @@
   }
 
   .drowsy-title h1 {
-    font-size: 21px;
+    font-size: 23px;
   }
 
   .drowsy-title p {
     max-width: 265px;
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .drowsy-actions {
@@ -965,7 +966,7 @@
   }
 
   .drowsy-overview > p {
-    font-size: 9px;
+    font-size: 12px;
   }
 
   .camera-card-heading {
@@ -982,11 +983,11 @@
 
   .camera-placeholder strong {
     max-width: 230px;
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .camera-placeholder > span {
-    font-size: 9px;
+    font-size: 11px;
   }
 
   .camera-footnote {
@@ -994,7 +995,7 @@
     flex-direction: column;
     gap: 7px;
     padding-inline: 2px;
-    font-size: 8px;
+    font-size: 11px;
   }
 
   .assessment-column {
@@ -1021,6 +1022,342 @@
   .session-live .session-indicator,
   .camera-state-live > span,
   .assessment-state-alert {
+    animation: none;
+  }
+}
+
+.sim-monitor-dock {
+  position: absolute;
+  z-index: 60;
+  right: 16px;
+  bottom: 44px;
+  width: min(330px, calc(100vw - 32px));
+  overflow: hidden;
+  border: 1px solid oklch(1 0 0 / 14%);
+  border-radius: 13px;
+  background: oklch(0.16 0.025 255 / 96%);
+  box-shadow: 0 16px 48px oklch(0 0 0 / 42%);
+  color: var(--foreground);
+  backdrop-filter: blur(18px);
+}
+
+.sim-monitor-alert {
+  border-color: oklch(0.65 0.22 25 / 60%);
+  box-shadow: 0 0 28px oklch(0.65 0.22 25 / 18%), 0 16px 48px oklch(0 0 0 / 42%);
+}
+
+.sim-monitor-topline {
+  min-height: 67px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+}
+
+.sim-monitor-avatar {
+  width: 37px;
+  height: 37px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid oklch(0.72 0.14 240 / 26%);
+  border-radius: 11px;
+  color: oklch(0.79 0.09 225);
+  background: oklch(0.72 0.14 240 / 11%);
+}
+
+.sim-monitor-title {
+  min-width: 0;
+  display: grid;
+  flex: 1;
+  gap: 5px;
+}
+
+.sim-monitor-title strong {
+  overflow: hidden;
+  color: oklch(0.96 0.005 250);
+  font-size: 13px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-monitor-title > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: oklch(0.76 0.02 250);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-monitor-title > span i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: oklch(0.62 0.02 250);
+}
+
+.sim-monitor-title > .sim-monitor-live i {
+  background: oklch(0.76 0.16 150);
+  box-shadow: 0 0 0 3px oklch(0.76 0.16 150 / 14%);
+  animation: monitor-pulse 1.7s ease-in-out infinite;
+}
+
+.sim-monitor-alert .sim-monitor-title > .sim-monitor-live {
+  color: oklch(0.86 0.1 25);
+}
+
+.sim-monitor-alert .sim-monitor-title > .sim-monitor-live i {
+  background: var(--destructive);
+  box-shadow: 0 0 0 3px oklch(0.65 0.22 25 / 16%);
+}
+
+.sim-monitor-icon-button {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid oklch(1 0 0 / 10%);
+  border-radius: 8px;
+  color: oklch(0.78 0.02 250);
+  background: oklch(1 0 0 / 4%);
+  cursor: pointer;
+}
+
+.sim-monitor-icon-button:hover {
+  border-color: oklch(0.72 0.14 240 / 42%);
+  color: var(--foreground);
+  background: oklch(0.72 0.14 240 / 10%);
+}
+
+.sim-monitor-body {
+  max-height: 340px;
+  overflow: hidden;
+  padding: 0 12px 12px;
+  opacity: 1;
+  transition: max-height 220ms ease, opacity 160ms ease, padding 220ms ease;
+}
+
+.sim-monitor-body-collapsed {
+  max-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  opacity: 0;
+}
+
+.sim-monitor-person-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid oklch(1 0 0 / 8%);
+  border-radius: 10px;
+  background: oklch(0.2 0.025 255 / 88%);
+}
+
+.sim-monitor-camera {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid oklch(1 0 0 / 12%);
+  border-radius: 9px;
+  color: oklch(0.65 0.025 250);
+  background: oklch(0.13 0.02 255);
+}
+
+.sim-monitor-camera video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+.sim-monitor-camera-live {
+  border-color: oklch(0.76 0.16 150 / 40%);
+}
+
+.sim-monitor-camera-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border: 1px solid oklch(0.16 0.025 255);
+  border-radius: 50%;
+  background: oklch(0.76 0.16 150);
+  box-shadow: 0 0 8px oklch(0.76 0.16 150 / 65%);
+}
+
+.sim-monitor-alert .sim-monitor-camera-live {
+  border-color: oklch(0.65 0.22 25 / 55%);
+}
+
+.sim-monitor-alert .sim-monitor-camera-dot {
+  background: var(--destructive);
+  box-shadow: 0 0 8px oklch(0.65 0.22 25 / 70%);
+}
+
+.sim-monitor-person-copy {
+  min-width: 0;
+  display: grid;
+  flex: 1;
+  gap: 4px;
+}
+
+.sim-monitor-person-copy > span {
+  color: oklch(0.71 0.03 240);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+}
+
+.sim-monitor-person-copy strong {
+  overflow: hidden;
+  color: oklch(0.93 0.01 250);
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-monitor-person-copy small {
+  color: oklch(0.69 0.025 250);
+  font-size: 10px;
+}
+
+.sim-monitor-ok,
+.sim-monitor-warning {
+  width: 29px;
+  height: 29px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  color: oklch(0.76 0.12 155);
+  background: oklch(0.76 0.12 155 / 10%);
+}
+
+.sim-monitor-warning {
+  color: oklch(0.85 0.13 25);
+  background: oklch(0.65 0.22 25 / 15%);
+  animation: alert-glow 2s ease-in-out infinite;
+}
+
+.sim-monitor-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.sim-monitor-metrics > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  padding: 9px 8px;
+  border: 1px solid oklch(1 0 0 / 7%);
+  border-radius: 8px;
+  background: oklch(0.2 0.025 255 / 65%);
+}
+
+.sim-monitor-metrics span {
+  overflow: hidden;
+  color: oklch(0.69 0.025 250);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-monitor-metrics strong {
+  overflow: hidden;
+  color: oklch(0.94 0.01 250);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sim-monitor-error {
+  margin: 9px 0 0;
+  padding: 8px 9px;
+  border: 1px solid oklch(0.65 0.22 25 / 30%);
+  border-radius: 7px;
+  background: oklch(0.65 0.22 25 / 9%);
+  color: oklch(0.86 0.1 25);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.sim-monitor-action {
+  width: 100%;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 10px;
+  border: 1px solid oklch(0.72 0.14 240 / 33%);
+  border-radius: 8px;
+  color: oklch(0.15 0.025 255);
+  background: oklch(0.72 0.14 240);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sim-monitor-action:hover {
+  background: oklch(0.79 0.13 225);
+}
+
+.sim-monitor-action-stop {
+  border-color: oklch(0.65 0.22 25 / 35%);
+  color: oklch(0.86 0.1 25);
+  background: oklch(0.65 0.22 25 / 15%);
+}
+
+.sim-monitor-action-stop:hover {
+  background: oklch(0.65 0.22 25 / 25%);
+}
+
+.sim-monitor-audio-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 9px 2px 0;
+  color: oklch(0.7 0.025 250);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.sim-monitor-audio-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: oklch(0.75 0.08 225);
+}
+
+@media (max-width: 600px) {
+  .sim-monitor-dock {
+    right: auto;
+    top: 76px;
+    bottom: auto;
+    left: 10px;
+    width: min(330px, calc(100vw - 20px));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sim-monitor-title > .sim-monitor-live i,
+  .sim-monitor-warning {
     animation: none;
   }
 }
