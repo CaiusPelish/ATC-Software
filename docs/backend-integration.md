@@ -59,10 +59,16 @@ For runway-incursion conflicts, add `seconds_to_conflict` to `Conflict`: how lon
 | `conflicts[]` | `aircraft_ids` may include vehicle IDs; runway incursions use `critical` + the runway pair (e.g. `"4L/22R"`) |
 
 ## How to test
+The backend now uses **uv** (`pyproject.toml` + `uv.lock`); `requirements.txt` is gone. Install uv once (no admin needed):
 ```powershell
-cd backend
-py -m venv .venv
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+irm https://astral.sh/uv/install.ps1 | iex
 ```
+Then, from `backend/`:
+```powershell
+uv sync --group analysis
+uv run --with pytest pytest app/routing/tests app/simulation/tests/LiveTest.py tests -q
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+- **Add a package:** `uv add <name>` for anything the API needs at runtime, or `uv add --group analysis <name>` for offline scripts and plots.
+- **Commit** `pyproject.toml` and `uv.lock` together.
 Then run the frontend (`cd frontend`, `npm install`, `npm run dev`) and open <http://127.0.0.1:5173/sim>. The top-left badge reads **LIVE** when the state is drawable.
