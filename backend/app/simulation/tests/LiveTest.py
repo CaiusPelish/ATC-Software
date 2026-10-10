@@ -121,6 +121,63 @@ class LiveSimTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             sim.route(a.id, "not-a-node")
 
+    def test_default_has_traffic_at_start(self):
+        sim = load_scenario("default")
+        self.assertGreaterEqual(len(sim.state.aircraft), 1)
+        run(sim, 5)
+        self.assertTrue(any(a.status == "taxiing" for a in sim.state.aircraft))
+
+    def test_truck_crosses_runway(self):
+        """A truck driven across 22L/4R by the shortest path shows up as a runway incursion."""
+        sim = load_scenario("challenge_01")
+        truck = sim.vehicle("TRUCK01")
+        start = truck.position
+        far_side = "rwy_22L"
+        sim.route_vehicle("TRUCK01", far_side)
+        self.assertEqual(truck.route[0], start)
+        self.assertEqual(truck.route[-1], far_side)
+        for u, v in zip(truck.route, truck.route[1:]):
+            self.assertIn(v, airport_graph[u])
+        self.assertEqual(truck.status, "taxiing")
+
+        run(sim, 2)
+        sim.hold_vehicle("TRUCK01", True)
+        frozen = truck.progress
+        run(sim, 5)
+        self.assertEqual((truck.status, truck.progress, truck.speed), ("holding", frozen, 0.0))
+        sim.hold_vehicle("TRUCK01", False)
+        incursions = []
+        run(sim, sim.tracks["TRUCK01"].end_t - sim.now + 1, lambda sim, k: incursions.extend(
+            c for c in sim.state.conflicts if "TRUCK01" in c.aircraft_ids and "/" in c.location))
+        self.assertEqual((truck.status, truck.position, truck.progress), ("waiting", far_side, 1.0))
+        self.assertTrue(incursions)
+
+    def test_truck_reroute_mid_edge(self):
+        """Rerouting while between nodes keeps the truck where it is on the map."""
+        sim = LiveSim(auto_spawn=False, seed=0)
+        sim.add_vehicle("TRUCK01", [sim.ramps[0]])
+        sim.route_vehicle("TRUCK01", "rwy_4L")
+        run(sim, 3.1)
+        before = sim.tracks["TRUCK01"]
+        d = before.dist(sim.now)
+        node = before.route[before.index(d)]
+        sim.route_vehicle("TRUCK01", sim.ramps[-1])
+        after = sim.tracks["TRUCK01"]
+        self.assertEqual(after.route[0], node)
+        self.assertAlmostEqual(after.dist(sim.now), d - before.cum[before.index(d)], places=6)
+
+    def test_bad_vehicle_requests(self):
+        sim = LiveSim(auto_spawn=False, seed=0)
+        sim.add_vehicle("TRUCK01", [sim.ramps[0]])
+        with self.assertRaises(ValueError):
+            sim.add_vehicle("TRUCK01", [sim.ramps[1]])
+        with self.assertRaises(ValueError):
+            sim.add_vehicle("TRUCK02", ["not-a-node"])
+        with self.assertRaises(ValueError):
+            sim.route_vehicle("TRUCK01", "not-a-node")
+        with self.assertRaises(KeyError):
+            sim.hold_vehicle("nope", True)
+
 
 if __name__ == "__main__":
     unittest.main()

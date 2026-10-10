@@ -6,8 +6,16 @@ from .live import LiveSim
 
 
 def _default():
-    """Endless traffic: arrivals on 22L, departures off 22R, all routed by the planner."""
-    return LiveSim()
+    """Endless traffic: arrivals on 22L, departures off 22R, all routed by the planner.
+
+    Two departures are already taxiing at the start, so the map isn't empty
+    while the first arrival is still on final.
+    """
+    sim = LiveSim()
+    for _ in range(2):
+        sim.spawn_departure()
+    sim.tick(0)
+    return sim
 
 
 def _empty():

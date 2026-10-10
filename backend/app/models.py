@@ -30,6 +30,7 @@ class Vehicle(BaseModel):
     route: list[str] = Field(default_factory=list)
     speed: float = 0.0
     progress: float = 0.0
+    status: Literal["waiting", "taxiing", "holding"] = "waiting"
 
 
 class Conflict(BaseModel):
@@ -67,6 +68,11 @@ class RouteRequest(BaseModel):
 
 class HoldRequest(BaseModel):
     hold: bool
+
+
+class SpawnVehicleRequest(BaseModel):
+    id: str
+    position: str
 
 
 class SpawnAircraftResponse(BaseModel):

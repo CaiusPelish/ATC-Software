@@ -29,6 +29,7 @@ from collections import deque
 from ..conflicts.detector import detect_conflicts
 from ..models import Aircraft, SimulationState, Vehicle
 from ..routing.airport import DT, TAXI_SPEED, get_airport
+from ..routing.astar import astar
 from ..routing.graph import airport_graph, runway_edges
 from ..routing.mapf import AircraftRequest, plan_one
 from ..routing.reservations import ReservationTable
@@ -65,6 +66,8 @@ ARRIVED_LINGER_S = 8
 REPAIR_RETRIES = 2
 # Faster than taxiing: on a landing or takeoff roll, where the aircraft can't be stopped.
 ROLL_SPEED_MS = 1.5 * TAXI_SPEED
+# Fire trucks and other ground vehicles, about 25 kt.
+VEHICLE_SPEED_MS = 13.0
 
 
 class NoRoute(ValueError):
@@ -302,6 +305,9 @@ class LiveSim:
         d = tr.dist(t)
         v.position = tr.route[tr.index(d)]
         v.progress = round(d / tr.length, 4) if tr.length else 0.0
+        v.speed = round(tr.speed(t), 2)
+        if v.status == "taxiing" and t >= tr.end_t:
+            v.status = "waiting"
 
     def _drop_finished(self, t):
         gone = {aid for aid, done in self.finished_at.items()
@@ -417,13 +423,68 @@ class LiveSim:
         return a
 
     def add_vehicle(self, vid, route, speed=0.0, start_s=None):
+        if vid in self.tracks:
+            raise ValueError(f"{vid} already exists")
+        if route[0] not in airport_graph:
+            raise ValueError(f"{route[0]} is not a ground node")
         start = self.now if start_s is None else start_s
         tr = Track(route, [(start, 0.0)])
         if speed > 0 and tr.length > 0:
             tr.points.append((start + tr.length / speed, tr.length))
         self.tracks[vid] = tr
-        v = Vehicle(id=vid, position=route[0], route=list(route), speed=speed)
+        v = Vehicle(id=vid, position=route[0], route=list(route), speed=speed,
+                    status="taxiing" if len(tr.points) > 1 else "waiting")
         self.state.vehicles.append(v)
+        return v
+
+    # ---- vehicles ---------------------------------------------------------
+    # Trucks are not planned: they drive the shortest way, runways included,
+    # and reserve nothing. Running into traffic is what conflicts report.
+
+    def vehicle(self, vid):
+        for v in self.state.vehicles:
+            if v.id == vid:
+                return v
+        raise KeyError(vid)
+
+    def route_vehicle(self, vid, destination, speed=VEHICLE_SPEED_MS):
+        """Drive vid by the shortest ground path from where it is to destination."""
+        v = self.vehicle(vid)
+        if destination not in airport_graph:
+            raise ValueError(f"{destination} is not a ground node")
+        tr, t = self.tracks[vid], self.now
+        d = tr.dist(t)
+        i = tr.index(d)
+        # Between two nodes: keep going to the next one, then turn there.
+        mid_edge = i < len(tr.route) - 1 and d > tr.cum[i] + 1e-6
+        head = tr.route[i:i + 2] if mid_edge else tr.route[i:i + 1]
+        found = astar(airport_graph, head[-1], destination)
+        if found is None:
+            raise ValueError(f"No ground path from {head[-1]} to {destination}")
+        new = Track(head + found["route"][1:], [(t, d - tr.cum[i])])
+        if new.length > new.points[0][1]:
+            new.points.append((t + (new.length - new.points[0][1]) / speed, new.length))
+        self.tracks[vid] = new
+        v.route = new.route
+        v.status = "taxiing" if len(new.points) > 1 else "waiting"
+        self._update_vehicle(v, t)
+        return v
+
+    def hold_vehicle(self, vid, hold, speed=VEHICLE_SPEED_MS):
+        """Stop vid where it is (hold=True), or carry on along its route (hold=False)."""
+        v = self.vehicle(vid)
+        tr, t = self.tracks[vid], self.now
+        d = tr.dist(t)
+        if hold:
+            self.tracks[vid] = Track(tr.route, [(t, d)])
+            v.status = "holding"
+        elif v.status == "holding":
+            new = Track(tr.route, [(t, d)])
+            if tr.length > d:
+                new.points.append((t + (tr.length - d) / speed, tr.length))
+            self.tracks[vid] = new
+            v.status = "taxiing" if len(new.points) > 1 else "waiting"
+        self._update_vehicle(v, t)
         return v
 
     # ---- reservations ----------------------------------------------------

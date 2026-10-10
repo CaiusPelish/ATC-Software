@@ -18,7 +18,8 @@ from .models import (
     HoldRequest,
     RouteRequest,
     SpawnAircraftRequest,
-    SpawnAircraftResponse
+    SpawnAircraftResponse,
+    SpawnVehicleRequest,
 )
 from .simulation.spawner import spawn_aircraft
 
@@ -214,6 +215,35 @@ async def assign_aircraft_route(aircraft_id: str):
         "estimated_time": max(0.0, track.end_t - world.sim.now),
         "status": aircraft.status
     }
+
+
+def _act_vehicle(action, vehicle_id, *args):
+    try:
+        return action(vehicle_id, *args).model_copy(deep=True)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/vehicles", status_code=201)
+async def spawn_vehicle(request: SpawnVehicleRequest):
+    try:
+        vehicle = world.sim.add_vehicle(request.id, [request.position])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return vehicle.model_copy(deep=True)
+
+
+@app.post("/api/vehicles/{vehicle_id}/route")
+async def route_vehicle(vehicle_id: str, request: RouteRequest):
+    """Shortest ground path from where the vehicle is; it crosses runways without asking."""
+    return _act_vehicle(world.sim.route_vehicle, vehicle_id, request.destination)
+
+
+@app.post("/api/vehicles/{vehicle_id}/hold")
+async def hold_vehicle(vehicle_id: str, request: HoldRequest):
+    return _act_vehicle(world.sim.hold_vehicle, vehicle_id, request.hold)
 
 
 @app.post("/api/simulation/start")
