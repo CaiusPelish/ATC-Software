@@ -1,0 +1,28 @@
+# Node / frontend
+node_modules/
+dist/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Environment variables
+.env
+.env.*
+
+# Editor and OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Generated models
+*.pkl
+*.joblib
+*.pt
+*.pth
+
+# Large datasets
+data/raw/
+data/processed/
