@@ -1,5 +1,3 @@
-# backend/app/routing/graph.py
-
 """The graph the API serves: KEWR_ground.json (taxiways plus runway nodes).
 
 Same {node: {neighbor: meters}} shape as before, so /api/graph, /api/route

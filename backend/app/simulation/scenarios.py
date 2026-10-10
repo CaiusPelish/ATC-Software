@@ -1,5 +1,3 @@
-# backend/app/simulation/scenarios.py
-
 """Starting setups for the live simulation (POST /api/scenario/load)."""
 
 from ..routing.astar import astar

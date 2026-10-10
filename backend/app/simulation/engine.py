@@ -1,5 +1,3 @@
-# backend/app/simulation/engine.py
-
 TICK_S = 0.25
 
 

@@ -1,5 +1,3 @@
-# backend/app/simulation/state.py
-
 """The one running simulation the API serves; replaced on reset or scenario load."""
 
 from .scenarios import load_scenario

@@ -15,6 +15,15 @@ class Aircraft(BaseModel):
     ] = "waiting"
 
 
+class ScheduledSpawn(BaseModel):
+    spawn_time: float
+    callsign: str
+    aircraft_type: str = "A320"
+    position: str
+    destination: str
+    spawned: bool = False
+
+
 class Vehicle(BaseModel):
     id: str
     position: str
@@ -35,7 +44,14 @@ class SimulationState(BaseModel):
     aircraft: list[Aircraft] = Field(default_factory=list)
     vehicles: list[Vehicle] = Field(default_factory=list)
     conflicts: list[Conflict] = Field(default_factory=list)
+    scheduled_spawns: list["ScheduledSpawn"] = Field(
+        default_factory=list
+    )
     score: int = 1000
+    # pending_spawns: list[ScheduledSpawn] = Field(
+    #     default_factory=list
+    # )
+    
 
 class SpawnAircraftRequest(BaseModel):
     callsign: str

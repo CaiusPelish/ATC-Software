@@ -25,7 +25,6 @@ from .simulation.spawner import spawn_aircraft
 class ScenarioRequest(BaseModel):
     scenario_id: str
 
-
 # Open /api/ws connections; each gets the full state after every tick.
 clients: set[WebSocket] = set()
 
@@ -174,7 +173,6 @@ async def create_aircraft(request: SpawnAircraftRequest):
         message="Aircraft spawned successfully"
     )
 
-
 def _act(action, aircraft_id, *args):
     try:
         return action(aircraft_id, *args).model_copy(deep=True)
@@ -197,3 +195,42 @@ async def route_aircraft(aircraft_id: str, request: RouteRequest):
 @app.post("/api/aircraft/{aircraft_id}/hold")
 async def hold_aircraft(aircraft_id: str, request: HoldRequest):
     return _act(world.sim.hold, aircraft_id, request.hold)
+
+
+@app.post("/api/aircraft/{aircraft_id}/assign-route")
+async def assign_aircraft_route(aircraft_id: str):
+    try:
+        aircraft = world.sim.aircraft(aircraft_id)
+        aircraft = world.sim.route(aircraft_id, aircraft.destination)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Aircraft not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    track = world.sim.tracks[aircraft_id]
+    return {
+        "aircraft_id": aircraft.id,
+        "route": aircraft.route,
+        "estimated_time": max(0.0, track.end_t - world.sim.now),
+        "status": aircraft.status
+    }
+
+
+@app.post("/api/simulation/start")
+async def start_simulation():
+    world.sim.state.running = True
+
+    return {
+        "message": "Simulation started",
+        "time": world.sim.state.time
+    }
+
+
+@app.post("/api/simulation/pause")
+async def pause_simulation():
+    world.sim.state.running = False
+
+    return {
+        "message": "Simulation paused",
+        "time": world.sim.state.time
+    }
