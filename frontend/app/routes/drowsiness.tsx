@@ -49,6 +49,9 @@ export default function DrowsinessMonitorPage() {
   const requestRef = useRef<AbortController | null>(null);
   const sessionRef = useRef<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const voiceRequestRef = useRef<AbortController | null>(null);
+  const voiceAudioRef = useRef<HTMLAudioElement | null>(null);
+  const voiceObjectUrlRef = useRef<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [monitoring, setMonitoring] = useState(false);
   const [result, setResult] = useState<DrowsinessResult | null>(null);
@@ -139,6 +142,11 @@ export default function DrowsinessMonitorPage() {
       if (audioContextRef.current && audioContextRef.current.state !== "closed") {
         void audioContextRef.current?.close();
       }
+      voiceRequestRef.current?.abort();
+      voiceAudioRef.current?.pause();
+      if (voiceObjectUrlRef.current) {
+        URL.revokeObjectURL(voiceObjectUrlRef.current);
+      }
       const session = sessionRef.current;
       if (session) {
         void fetch(
@@ -202,6 +210,8 @@ export default function DrowsinessMonitorPage() {
   async function stopMonitoring() {
     setMonitoring(false);
     requestRef.current?.abort();
+    voiceRequestRef.current?.abort();
+    voiceAudioRef.current?.pause();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     const session = sessionRef.current;
@@ -276,6 +286,73 @@ export default function DrowsinessMonitorPage() {
     return () => {
       cancelled = true;
       if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [alarming, monitoring, soundEnabled]);
+
+  useEffect(() => {
+    if (!monitoring || !alarming || !soundEnabled) return;
+
+    const controller = new AbortController();
+    voiceRequestRef.current = controller;
+    let active = true;
+
+    async function playVoiceAlert() {
+      try {
+        const response = await fetch("/drowsiness/voice-alert", {
+          method: "POST",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const body = (await response.json()) as { error?: string };
+          throw new Error(body.error ?? "The voice alert could not be generated.");
+        }
+
+        const objectUrl = URL.createObjectURL(await response.blob());
+        if (!active) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+
+        if (voiceObjectUrlRef.current) {
+          URL.revokeObjectURL(voiceObjectUrlRef.current);
+        }
+        const audio = new Audio(objectUrl);
+        voiceObjectUrlRef.current = objectUrl;
+        voiceAudioRef.current = audio;
+        audio.addEventListener(
+          "ended",
+          () => {
+            URL.revokeObjectURL(objectUrl);
+            if (voiceObjectUrlRef.current === objectUrl) {
+              voiceObjectUrlRef.current = null;
+              voiceAudioRef.current = null;
+            }
+          },
+          { once: true },
+        );
+        await audio.play();
+      } catch (caught) {
+        if (controller.signal.aborted) return;
+        setSoundError(
+          caught instanceof Error
+            ? caught.message
+            : "The ElevenLabs voice alert could not be played.",
+        );
+      }
+    }
+
+    void playVoiceAlert();
+    return () => {
+      active = false;
+      controller.abort();
+      if (voiceAudioRef.current) {
+        voiceAudioRef.current.pause();
+        voiceAudioRef.current = null;
+      }
+      if (voiceObjectUrlRef.current) {
+        URL.revokeObjectURL(voiceObjectUrlRef.current);
+        voiceObjectUrlRef.current = null;
+      }
     };
   }, [alarming, monitoring, soundEnabled]);
 
@@ -421,7 +498,7 @@ export default function DrowsinessMonitorPage() {
                 </div>
                 <div className={`sound-notice ${soundError ? "sound-notice-error" : ""}`}>
                   {soundError ? <VolumeX size={15} /> : soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
-                  <span>{soundError ?? (soundEnabled ? "Two-tone alert repeats every 5 seconds while drowsy." : "Sound alerts are muted.")}</span>
+                  <span>{soundError ?? (soundEnabled ? "Two-tone beep repeats every 5 seconds; ElevenLabs speaks when drowsiness is first detected." : "Sound and voice alerts are muted.")}</span>
                 </div>
                 {error && (
                   <p role="alert" className="drowsy-error">

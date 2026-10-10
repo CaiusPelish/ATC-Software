@@ -113,6 +113,7 @@
 
 .drowsy-page {
   min-height: 100svh;
+  font-size: 14px;
   background:
     radial-gradient(ellipse at 88% 0%, oklch(0.28 0.06 220 / 35%), transparent 38rem),
     radial-gradient(ellipse at 0% 48%, oklch(0.24 0.04 252 / 48%), transparent 46rem),
@@ -152,7 +153,7 @@
 .drowsy-title p {
   margin: 5px 0 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .drowsy-kicker,
@@ -162,7 +163,7 @@
   gap: 7px;
   color: oklch(0.75 0.035 230);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 550;
   letter-spacing: 0.13em;
 }
@@ -250,7 +251,7 @@
   border-radius: 999px;
   background: oklch(0.21 0.025 255);
   color: oklch(0.79 0.025 245);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -280,7 +281,7 @@
 .drowsy-overview > p {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: 14px;
   line-height: 1.6;
 }
 
@@ -319,7 +320,7 @@
 
 .panel-kicker {
   color: oklch(0.71 0.03 240);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .panel-kicker svg {
@@ -329,7 +330,7 @@
 .camera-card-heading h2 {
   margin: 8px 0 0;
   color: var(--foreground);
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 650;
   letter-spacing: -0.02em;
 }
@@ -337,7 +338,7 @@
 .camera-card-heading p {
   margin: 5px 0 0;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .camera-state {
@@ -350,7 +351,7 @@
   background: oklch(0.17 0.02 255 / 70%);
   color: oklch(0.67 0.02 250);
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 0.08em;
 }
 
@@ -427,13 +428,13 @@
 
 .camera-placeholder strong {
   color: oklch(0.9 0.01 250);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .camera-placeholder > span {
   color: oklch(0.68 0.02 250);
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .camera-live-badge {
@@ -448,7 +449,7 @@
   border-radius: 6px;
   background: oklch(0.12 0.02 255 / 85%);
   color: oklch(0.93 0.005 250);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 650;
   backdrop-filter: blur(8px);
 }
@@ -515,7 +516,7 @@
   bottom: 11px;
   color: oklch(0.85 0.015 250 / 76%);
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 11px;
   letter-spacing: 0.08em;
   text-shadow: 0 1px 5px #000;
 }
@@ -527,7 +528,7 @@
   gap: 12px;
   padding: 12px 2px 0;
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 11px;
 }
 
 .camera-footnote span {
@@ -569,7 +570,7 @@
 .assessment-header [data-slot="card-title"],
 .interpretation-header [data-slot="card-title"] {
   color: var(--foreground);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 650;
 }
 
@@ -605,7 +606,7 @@
   border-radius: 8px;
   background: oklch(0.75 0.16 150 / 7%);
   color: oklch(0.83 0.08 155);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 650;
 }
 
@@ -647,13 +648,13 @@
 
 .metric-label-row > span {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .metric-label-row > strong {
   color: oklch(0.93 0.01 250);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 550;
   font-variant-numeric: tabular-nums;
 }
@@ -686,7 +687,7 @@
   border-radius: 7px;
   background: oklch(0.17 0.02 255 / 70%);
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -715,7 +716,7 @@
   border-radius: 7px;
   background: oklch(0.65 0.22 25 / 9%);
   color: oklch(0.86 0.1 25);
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -749,13 +750,13 @@
 }
 
 .interpretation-header [data-slot="card-title"] {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .interpretation-header p {
   margin: 4px 0 0;
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .interpretation-content {
@@ -771,13 +772,13 @@
   gap: 9px;
   border-top: 1px solid oklch(1 0 0 / 6%);
   color: oklch(0.8 0.015 250);
-  font-size: 8px;
+  font-size: 11px;
 }
 
 .interpretation-index {
   color: oklch(0.59 0.025 250);
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .interpretation-content svg {
@@ -815,13 +816,13 @@
 
 .privacy-copy strong {
   color: oklch(0.89 0.01 250);
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 650;
 }
 
 .privacy-copy span {
   color: var(--muted-foreground);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -837,7 +838,7 @@
   gap: 7px;
   margin-top: 14px;
   color: oklch(0.65 0.02 250);
-  font-size: 8px;
+  font-size: 11px;
   line-height: 1.5;
 }
 
@@ -927,12 +928,12 @@
   }
 
   .drowsy-title h1 {
-    font-size: 21px;
+    font-size: 23px;
   }
 
   .drowsy-title p {
     max-width: 265px;
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .drowsy-actions {
@@ -965,7 +966,7 @@
   }
 
   .drowsy-overview > p {
-    font-size: 9px;
+    font-size: 12px;
   }
 
   .camera-card-heading {
@@ -982,11 +983,11 @@
 
   .camera-placeholder strong {
     max-width: 230px;
-    font-size: 10px;
+    font-size: 12px;
   }
 
   .camera-placeholder > span {
-    font-size: 9px;
+    font-size: 11px;
   }
 
   .camera-footnote {
@@ -994,7 +995,7 @@
     flex-direction: column;
     gap: 7px;
     padding-inline: 2px;
-    font-size: 8px;
+    font-size: 11px;
   }
 
   .assessment-column {
