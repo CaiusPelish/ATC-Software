@@ -4,10 +4,17 @@ import { Link } from "react-router";
 import {
   AlertTriangle,
   ArrowLeft,
+  AudioLines,
   Camera,
   CameraOff,
+  Check,
   Eye,
+  EyeOff,
+  Info,
   Plane,
+  ShieldCheck,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "~/components/ui/card";
@@ -41,10 +48,13 @@ export default function DrowsinessMonitorPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const sessionRef = useRef<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [monitoring, setMonitoring] = useState(false);
   const [result, setResult] = useState<DrowsinessResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundError, setSoundError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!monitoring || !sessionId) return;
@@ -126,6 +136,9 @@ export default function DrowsinessMonitorPage() {
     () => () => {
       requestRef.current?.abort();
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      if (audioContextRef.current && audioContextRef.current.state !== "closed") {
+        void audioContextRef.current?.close();
+      }
       const session = sessionRef.current;
       if (session) {
         void fetch(
@@ -141,10 +154,24 @@ export default function DrowsinessMonitorPage() {
 
   async function startMonitoring() {
     setError(null);
+    setSoundError(null);
     setResult(null);
     if (!navigator.mediaDevices?.getUserMedia) {
       setError("Camera access is unavailable. Use HTTPS or open the app on localhost.");
       return;
+    }
+
+    try {
+      if (!audioContextRef.current || audioContextRef.current.state === "closed") {
+        audioContextRef.current = new AudioContext();
+      }
+      await audioContextRef.current.resume();
+    } catch (caught) {
+      setSoundError(
+        caught instanceof Error
+          ? "Audio could not be enabled. Check your browser audio settings."
+          : "Audio is unavailable in this browser.",
+      );
     }
 
     try {
@@ -200,46 +227,97 @@ export default function DrowsinessMonitorPage() {
 
   const status = result?.status ?? (monitoring ? "starting" : "stopped");
   const statusLabel: Record<string, string> = {
-    alert: "Alert",
+    alert: "Eyes open",
     drowsy: "Drowsiness detected",
     eyes_closed: "Eyes closed",
     no_face: "No face detected",
     starting: "Starting monitor",
     stopped: "Monitor stopped",
   };
-  const alarming = result?.alarm === true;
+  const alarming = monitoring && result?.alarm === true;
+
+  useEffect(() => {
+    const audioContext = audioContextRef.current;
+    if (!monitoring || !alarming || !soundEnabled || !audioContext) return;
+
+    let cancelled = false;
+    let interval: number | undefined;
+    const playAlarmBeep = () => {
+      const now = audioContext.currentTime;
+      for (const [index, frequency] of [880, 1046].entries()) {
+        const start = now + index * 0.2;
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.16, start + 0.025);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+        oscillator.start(start);
+        oscillator.stop(start + 0.18);
+      }
+    };
+
+    void audioContext
+      .resume()
+      .then(() => {
+        if (cancelled) return;
+        playAlarmBeep();
+        interval = window.setInterval(playAlarmBeep, 5000);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSoundError("Alarm sound could not play. Check your browser audio settings.");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (interval !== undefined) window.clearInterval(interval);
+    };
+  }, [alarming, monitoring, soundEnabled]);
 
   return (
-    <main className="mx-auto flex min-h-svh w-full max-w-5xl flex-col gap-8 px-4 py-8 sm:px-6">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <Button asChild variant="ghost" className="-ml-3">
+    <main className="drowsy-page">
+      <header className="drowsy-header">
+        <div className="drowsy-heading">
+          <Button asChild variant="ghost" className="drowsy-back">
             <Link to="/">
               <ArrowLeft />
-              Home
+              <span>Home</span>
             </Link>
           </Button>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">
-            Drowsiness monitor
-          </h1>
-          <p className="mt-1 text-muted-foreground">
-            Opt-in webcam monitoring with computer vision
-          </p>
+          <div className="drowsy-title">
+            <div className="drowsy-kicker"><span /> ATC WELLNESS SYSTEM</div>
+            <h1>Drowsiness monitor</h1>
+            <p>Stay sharp. We&apos;ll watch for signs you need a break.</p>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button asChild variant="outline">
+        <div className="drowsy-actions">
+          <Button asChild variant="outline" className="simulation-link">
             <Link to="/sim">
               <Plane />
               Flight simulation
             </Link>
           </Button>
+          <Button
+            variant="outline"
+            className={`sound-toggle ${soundEnabled ? "sound-on" : ""}`}
+            aria-pressed={soundEnabled}
+            onClick={() => setSoundEnabled((enabled) => !enabled)}
+          >
+            {soundEnabled ? <Volume2 /> : <VolumeX />}
+            <span>Sound {soundEnabled ? "on" : "off"}</span>
+          </Button>
           {monitoring ? (
-            <Button onClick={() => void stopMonitoring()} variant="outline">
+            <Button onClick={() => void stopMonitoring()} className="monitor-stop">
               <CameraOff />
-              Stop monitoring
+              Stop monitor
             </Button>
           ) : (
-            <Button onClick={() => void startMonitoring()}>
+            <Button onClick={() => void startMonitoring()} className="monitor-start">
               <Camera />
               Start monitoring
             </Button>
@@ -247,116 +325,163 @@ export default function DrowsinessMonitorPage() {
         </div>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.4fr)_minmax(18rem,0.8fr)]">
-        <Card className="overflow-hidden">
-          <CardContent className="p-0">
-            <div className="relative aspect-video bg-black">
-              <video
-                aria-label="Webcam preview"
-                autoPlay
-                className="size-full object-cover"
-                muted
-                playsInline
-                ref={videoRef}
-              />
-              <canvas className="hidden" ref={canvasRef} />
-              {!monitoring && (
-                <div className="absolute inset-0 grid place-items-center text-sm text-muted-foreground">
-                  Camera preview will appear after you start monitoring.
-                </div>
-              )}
-              {monitoring && (
-                <div
-                  className={`absolute left-4 top-4 flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium ${
-                    alarming
-                      ? "bg-destructive text-white"
-                      : "bg-background/85 text-foreground"
-                  }`}
-                >
-                  {alarming ? (
-                    <AlertTriangle className="size-4" />
-                  ) : (
-                    <span className="size-2 animate-pulse rounded-full bg-green-500" />
-                  )}
-                  {statusLabel[status]}
-                </div>
-              )}
+      <section className="drowsy-workspace">
+        <div className="drowsy-overview">
+          <div className={`session-status ${monitoring ? "session-live" : ""} ${alarming ? "session-alert" : ""}`}>
+            <span className="session-indicator" />
+            <span>{monitoring ? (alarming ? "Attention needed" : "Monitoring live") : "Monitor ready"}</span>
+          </div>
+          <p>The preview stays in your browser. Camera frames are sent to the connected detector for analysis and are not stored.</p>
+        </div>
+
+        <div className="drowsy-grid">
+          <Card className={`camera-card ${alarming ? "camera-alarming" : ""}`}>
+            <div className="camera-card-heading">
+              <div>
+                <div className="panel-kicker"><Eye size={14} /> LIVE CAMERA FEED</div>
+                <h2>Driver awareness</h2>
+                <p>Keep your face centered and well lit.</p>
+              </div>
+              <div className={`camera-state ${monitoring ? "camera-state-live" : ""}`}>
+                <span />
+                {monitoring ? "LIVE" : "STANDBY"}
+              </div>
             </div>
-          </CardContent>
-        </Card>
+            <CardContent className="camera-content">
+              <div className={`camera-view ${monitoring ? "camera-view-live" : ""}`}>
+                <video
+                  aria-label="Webcam preview"
+                  autoPlay
+                  className="camera-video"
+                  muted
+                  playsInline
+                  ref={videoRef}
+                />
+                <canvas className="hidden" ref={canvasRef} />
+                {!monitoring && (
+                  <div className="camera-placeholder">
+                    <div className="camera-placeholder-icon"><Camera size={27} /></div>
+                    <strong>Your camera preview will appear here</strong>
+                    <span>Start monitoring when you&apos;re ready.</span>
+                  </div>
+                )}
+                {monitoring && (
+                  <>
+                    <div className="camera-live-badge">
+                      {alarming ? <AlertTriangle size={14} /> : <span className="live-pulse" />}
+                      {statusLabel[status]}
+                    </div>
+                    <div className="camera-corners" aria-hidden="true"><i /><i /><i /><i /></div>
+                    <span className="camera-time">FRAME CHECK · 1S</span>
+                  </>
+                )}
+              </div>
+              <div className="camera-footnote">
+                <span><ShieldCheck size={14} /> Private camera session</span>
+                <span><AudioLines size={14} /> Sound alerts {soundEnabled ? "enabled" : "muted"}</span>
+              </div>
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Eye className="size-5" />
-              Live assessment
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-5">
-            <p
-              aria-live="polite"
-              className={`text-xl font-semibold ${
-                alarming ? "text-destructive" : ""
-              }`}
-            >
-              {statusLabel[status]}
-            </p>
-            <Metric
-              label="Closed-eye probability"
-              value={`${((result?.closed_probability ?? 0) * 100).toFixed(0)}%`}
-            />
-            <Metric
-              label="PERCLOS (15-second window)"
-              value={`${((result?.perclos ?? 0) * 100).toFixed(0)}%`}
-            />
-            <Metric
-              label="Continuous eye closure"
-              value={`${(result?.closed_duration ?? 0).toFixed(1)} s`}
-            />
-            {error && (
-              <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              This experimental aid is not a medical or safety-critical system.
-              Keep your attention on your work and follow your organization's
-              fatigue-management procedures.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+          <aside className="assessment-column">
+            <Card className={`assessment-card ${alarming ? "assessment-alarming" : ""}`}>
+              <CardHeader className="assessment-header">
+                <div>
+                  <div className="panel-kicker">REAL-TIME FEEDBACK</div>
+                  <CardTitle>Live assessment</CardTitle>
+                </div>
+                <div className={`assessment-icon ${alarming ? "assessment-icon-alert" : ""}`}>
+                  {alarming ? <AlertTriangle size={18} /> : <Eye size={18} />}
+                </div>
+              </CardHeader>
+              <CardContent className="assessment-content">
+                <div className={`assessment-state ${alarming ? "assessment-state-alert" : ""}`} aria-live="polite">
+                  <span className="assessment-state-dot" />
+                  <span>{statusLabel[status]}</span>
+                </div>
+                <div className="metrics">
+                  <Metric
+                    label="Closed-eye probability"
+                    value={`${((result?.closed_probability ?? 0) * 100).toFixed(0)}%`}
+                    progress={(result?.closed_probability ?? 0) * 100}
+                    alert={alarming}
+                  />
+                  <Metric
+                    label="PERCLOS · 15 sec"
+                    value={`${((result?.perclos ?? 0) * 100).toFixed(0)}%`}
+                    progress={(result?.perclos ?? 0) * 100}
+                    alert={alarming}
+                  />
+                  <Metric
+                    label="Continuous eye closure"
+                    value={`${(result?.closed_duration ?? 0).toFixed(1)} s`}
+                    progress={Math.min(((result?.closed_duration ?? 0) / 2) * 100, 100)}
+                    alert={alarming}
+                  />
+                </div>
+                <div className={`sound-notice ${soundError ? "sound-notice-error" : ""}`}>
+                  {soundError ? <VolumeX size={15} /> : soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
+                  <span>{soundError ?? (soundEnabled ? "Two-tone alert repeats every 5 seconds while drowsy." : "Sound alerts are muted.")}</span>
+                </div>
+                {error && (
+                  <p role="alert" className="drowsy-error">
+                    <Info size={15} /> {error}
+                  </p>
+                )}
+              </CardContent>
+            </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Camera and data</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-2 text-sm text-muted-foreground">
-          <p>
-            Your browser requests camera permission only after you choose Start
-            monitoring. The live preview remains in your browser.
-          </p>
-          <p>
-            Camera frames are sent to the backend for face/eye detection and
-            Hugging Face model inference. The backend does not save frame images;
-            it keeps only short-lived eye-state measurements in memory.
-          </p>
-          <p>
-            The first assessment with a detected face downloads the configured
-            model and may take longer than later checks. Use a well-lit space
-            and keep your face visible for best results.
-          </p>
-        </CardContent>
-      </Card>
+            <Card className="interpretation-card">
+              <CardHeader className="interpretation-header">
+                <div className="interpretation-icon"><EyeOff size={17} /></div>
+                <div><CardTitle>What we&apos;re checking</CardTitle><p>Small signs, early awareness.</p></div>
+              </CardHeader>
+              <CardContent className="interpretation-content">
+                <div><span className="interpretation-index">01</span><span>Eye closure patterns</span><Check size={14} /></div>
+                <div><span className="interpretation-index">02</span><span>Time spent with eyes closed</span><Check size={14} /></div>
+                <div><span className="interpretation-index">03</span><span>Changes over the last 15 sec</span><Check size={14} /></div>
+              </CardContent>
+            </Card>
+          </aside>
+        </div>
+
+        <section className="privacy-strip">
+          <div className="privacy-icon"><ShieldCheck size={17} /></div>
+          <div className="privacy-copy">
+            <strong>Your camera stays yours.</strong>
+            <span>Frames are checked by the connected backend and aren&apos;t saved. Only short-lived eye-state measurements are kept during this session.</span>
+          </div>
+          <div className="privacy-divider" />
+          <div className="privacy-copy privacy-hint">
+            <strong>First run can take a moment.</strong>
+            <span>The detection model may download its weights the first time it sees a face.</span>
+          </div>
+        </section>
+
+        <footer className="drowsy-disclaimer">
+          <Info size={14} />
+          <span>This experimental aid is not a medical or safety-critical system. Follow your organization&apos;s fatigue-management procedures.</span>
+        </footer>
+      </section>
     </main>
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({
+  label,
+  value,
+  progress,
+  alert,
+}: {
+  label: string;
+  value: string;
+  progress: number;
+  alert: boolean;
+}) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b pb-3">
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span className="font-mono font-medium tabular-nums">{value}</span>
+    <div className="metric-row">
+      <div className="metric-label-row"><span>{label}</span><strong>{value}</strong></div>
+      <div className="metric-track"><span className={alert ? "metric-fill metric-fill-alert" : "metric-fill"} style={{ width: `${Math.max(0, Math.min(progress, 100))}%` }} /></div>
     </div>
   );
 }
