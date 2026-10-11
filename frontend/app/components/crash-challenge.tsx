@@ -101,7 +101,8 @@ export function CrashChallenge({ challenge }: { challenge: Challenge }) {
             <CardDescription className="text-sm">
               {caught.kind === "runway" ? (
                 <>
-                  Caught <span className="font-semibold text-foreground">{caught.secondsBefore} s</span> before touchdown.
+                  Caught <span className="font-semibold text-foreground">{caught.secondsBefore} s</span> before the
+                  arrival reached the runway.
                 </>
               ) : (
                 "Caught before they collided."

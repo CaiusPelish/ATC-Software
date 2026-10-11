@@ -127,7 +127,8 @@ export function useCrashChallenge(state: SimulationState | null) {
         intruder,
         other: state.aircraft.find((a) => a.id === otherId)?.callsign ?? (runway ? "the arrival" : otherId ?? "traffic"),
         where: runway ? `runway ${RUNWAY}` : placeName(hit.location),
-        secondsBefore: Math.max(0, Math.round(TOUCHDOWN_S - state.time)),
+        // The backend's own time-to-conflict when it sends one, else the scenario's touchdown time.
+        secondsBefore: Math.max(0, Math.round(hit.seconds_to_conflict ?? TOUCHDOWN_S - state.time)),
       });
       setPhase("caught");
     } else if (state.time > CLEAR_AFTER_S) {

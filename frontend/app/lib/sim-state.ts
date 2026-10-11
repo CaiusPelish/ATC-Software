@@ -29,6 +29,23 @@ export type Conflict = {
   aircraft_ids: string[];
   location: string;
   severity: "warning" | "critical";
+  /** Runway incursions: seconds until the runway's user gets there (0 = already on it). */
+  seconds_to_conflict?: number | null;
+};
+
+/** The backend's alert for a conflict or predicted one; severity is raised by controller fatigue. */
+export type Alert = {
+  id: string;
+  kind: "runway" | "separation" | "predicted";
+  severity: "low" | "medium" | "high" | "critical";
+  text: string;
+  atc_phrase: string;
+  vehicle_ids: string[];
+  location: string;
+  seconds?: number | null;
+  fatigue: number;
+  created_s: number;
+  audio_url?: string | null;
 };
 
 /** A collision the backend predicts: a vehicle's route meets someone within LOOKAHEAD (30 s). */
@@ -49,6 +66,8 @@ export type SimulationState = {
   conflicts: Conflict[];
   /** Predicted collisions (newer backends only). */
   warnings?: CollisionWarning[];
+  /** Alerts with fatigue-adjusted severity (newer backends only). */
+  alerts?: Alert[];
   score: number;
 };
 

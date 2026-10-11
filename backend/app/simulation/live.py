@@ -26,6 +26,8 @@ import random
 from bisect import bisect_right
 from collections import deque
 
+from ..alerts import fatigue
+from ..alerts.manager import build_alerts
 from ..conflicts.detector import detect_conflicts
 from ..models import Aircraft, SimulationState, Vehicle
 from ..routing.airport import DT, TAXI_SPEED, get_airport
@@ -281,6 +283,7 @@ class LiveSim:
         self._drop_finished(t)
 
         self.state.conflicts, self.state.warnings = detect_conflicts(self)
+        self.state.alerts = build_alerts(self, fatigue.current_score())
         return self.state
 
     def _update_aircraft(self, a, t):

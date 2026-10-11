@@ -67,6 +67,11 @@ export function ConflictAlerts({ alerts: a, live }: { alerts: Alerts; live: bool
                   </div>
                 </div>
                 <CardTitle className="text-sm font-medium">{alert.text}</CardTitle>
+                {alert.escalated && (
+                  <p className="font-mono text-[10px] tracking-wider text-destructive uppercase" data-escalated="">
+                    Escalated · controller fatigue {alert.escalated.fatigue}
+                  </p>
+                )}
                 <CardDescription className="text-xs">
                   {alert.kind === "predicted"
                     ? alert.active

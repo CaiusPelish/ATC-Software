@@ -107,6 +107,18 @@ def _predicted(sim, t, movers, xy, now_close):
     return warnings
 
 
+def _seconds_until_on_runway(sim, user, t, window_open_step):
+    """How long until the aircraft whose runway window is open is actually on the runway.
+
+    An arrival's track starts where it crosses the threshold, so before that it's still
+    on final. A departure's window opens when its takeoff roll does. 0 = it's there now.
+    """
+    tr = sim.tracks.get(user)
+    if tr is not None and tr.points and tr.points[0][0] > t:
+        return round(tr.points[0][0] - t, 1)
+    return round(max(0.0, window_open_step * DT - t), 1)
+
+
 def detect_conflicts(sim):
     """(conflicts happening now, warnings of ones coming up)."""
     t = sim.now
@@ -120,14 +132,14 @@ def detect_conflicts(sim):
         for pair, runway in sim.gate.runways.items():
             if not runway.on_runway_xy(*xy[mid], margin=ZONE_M / 2):
                 continue
-            users = sorted({
-                label for w0, w1, label, kind in sim.gate.windows[pair]
-                if w0 <= step < w1 and label != mid
-                # Lining up behind a departure that is rolling is normal.
-                and not (kind == "takeoff" and sim.departs.get(mid) == pair)
-            })
-            for user in users:
-                conflicts.append(Conflict(aircraft_ids=[mid, user], location=pair, severity="critical"))
+            opens = {}  # runway user -> step its window opened
+            for w0, w1, label, kind in sim.gate.windows[pair]:
+                if w0 <= step < w1 and label != mid                         and not (kind == "takeoff" and sim.departs.get(mid) == pair):
+                    # (Lining up behind a departure that is rolling is normal.)
+                    opens[label] = min(w0, opens.get(label, w0))
+            for user in sorted(opens):
+                conflicts.append(Conflict(aircraft_ids=[mid, user], location=pair, severity="critical",
+                                          seconds_to_conflict=_seconds_until_on_runway(sim, user, t, opens[user])))
 
     planned = {a.id for a in sim.state.aircraft if a.status == "taxiing"}
     ids = [mid for mid, _ in movers]

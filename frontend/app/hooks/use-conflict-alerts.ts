@@ -1,13 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { describeConflict, describeWarning, type ConflictAlert } from "~/lib/alert-speech";
-import type { SimulationState } from "~/lib/sim-state";
+import type { Alert, SimulationState } from "~/lib/sim-state";
 
 const LINGER_MS = 10_000; // an alert stays up this long after its conflict ends
 const FLASH_TAIL_MS = 1_500; // the red flash keeps going briefly after a conflict clears
 const REANNOUNCE_MS = 30_000; // the same conflict isn't spoken again within this window
+const ESCALATED_FATIGUE = 70; // backend fatigue score at which alerts get urgent
+const LOUD_GAIN = 1.8;
 
-export type ShownAlert = ConflictAlert & { firstAt: number; lastAt: number; active: boolean };
+export type ShownAlert = ConflictAlert & {
+  firstAt: number;
+  lastAt: number;
+  active: boolean;
+  /** Set when the backend raised this alert because the controller is tired. */
+  escalated?: { severity: Alert["severity"]; fatigue: number };
+};
+
+/** The backend's alert for a pair is escalated when fatigue pushed it to high, or it's critical on a tired controller. */
+function escalation(state: SimulationState, pair: string): ShownAlert["escalated"] {
+  const a = state.alerts?.find((x) => [...x.vehicle_ids].sort().join("+") === pair);
+  if (!a || a.fatigue < ESCALATED_FATIGUE || (a.severity !== "high" && a.severity !== "critical")) return undefined;
+  return { severity: a.severity, fatigue: Math.round(a.fatigue) };
+}
 
 /**
  * Conflicts (happening now) and predicted collisions (the backend's 30 s lookahead) become
@@ -21,7 +36,7 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
   const dismissed = useRef(new Set<string>());
   const announced = useRef(new Map<string, number>());
   const audio = useRef<AudioContext | null>(null);
-  const queue = useRef<string[]>([]);
+  const queue = useRef<{ text: string; gain: number }[]>([]);
   const speaking = useRef(false);
 
   // Browsers only allow sound after a user gesture: unlock audio on the first click.
@@ -36,8 +51,9 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
 
   const playNext = useCallback(async () => {
     if (speaking.current) return;
-    const text = queue.current.shift();
-    if (!text) return;
+    const next = queue.current.shift();
+    if (!next) return;
+    const { text, gain } = next;
     speaking.current = true;
     try {
       const res = await fetch("/alerts/voice", {
@@ -55,7 +71,10 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
       const buffer = await ctx.decodeAudioData(await res.arrayBuffer());
       const source = ctx.createBufferSource();
       source.buffer = buffer;
-      source.connect(ctx.destination);
+      // Louder when the controller is tired (escalated alerts).
+      const volume = ctx.createGain();
+      volume.gain.value = gain;
+      source.connect(volume).connect(ctx.destination);
       await new Promise<void>((resolve) => {
         source.onended = () => resolve();
         source.start();
@@ -88,6 +107,7 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
         const old = byKey.get(c.key);
         byKey.set(c.key, {
           ...c,
+          escalated: escalation(state, c.pair),
           // Once critical, stay critical while the alert is up.
           severity: old?.severity === "critical" ? "critical" : c.severity,
           firstAt: old?.firstAt ?? now,
@@ -113,7 +133,8 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
         const last = announced.current.get(c.pair);
         if (last === undefined || now - last > REANNOUNCE_MS) {
           announced.current.set(c.pair, now);
-          queue.current.push(c.spoken);
+          const urgent = escalation(state, c.pair);
+          queue.current.push(urgent ? { text: `Urgent. ${c.spoken}`, gain: LOUD_GAIN } : { text: c.spoken, gain: 1 });
         }
       }
       void playNext();

@@ -19,7 +19,9 @@ from .simulation.engine import TICK_S, simulation_tick
 from pydantic import BaseModel
 from .simulation.scenarios import load_scenario
 
+from .alerts import fatigue
 from .models import (
+    FatigueReport,
     HoldRequest,
     RouteRequest,
     SpawnAircraftRequest,
@@ -91,6 +93,18 @@ def home():
 @app.get("/api/health")
 def health_check():
     return {"status": "ok"}
+
+
+@app.post("/api/fatigue")
+async def report_fatigue(report: FatigueReport):
+    """The browser's drowsiness monitor reports the controller's fatigue (0-100).
+    A tired controller gets more urgent alerts (alerts.manager.build_alerts)."""
+    return fatigue.report(report.score, report.perclos, report.alarm)
+
+
+@app.get("/api/fatigue")
+def get_fatigue():
+    return fatigue.snapshot()
 
 
 @app.get("/api/state", response_model=SimulationState)

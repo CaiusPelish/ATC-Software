@@ -178,6 +178,24 @@ export function useDrowsinessMonitor() {
     streamRef.current = null;
   }, [stopBeepLoop, stopVoiceAlert]);
 
+  // Report the fatigue score to the backend about once a second, so alerts get more
+  // urgent when the controller is tired. Fire-and-forget: the monitor works without it.
+  const latestResult = useRef(result);
+  latestResult.current = result;
+  useEffect(() => {
+    if (!monitoring) return;
+    const timer = window.setInterval(() => {
+      const r = latestResult.current;
+      if (!r) return;
+      void fetch("/api/fatigue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ score: r.fatigue, perclos: r.perclos, alarm: r.alarm }),
+      }).catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [monitoring]);
+
   const status = result?.status ?? (monitoring ? (landmarker ? "starting" : "loading") : "stopped");
   const statusLabel: Record<string, string> = {
     alert: "Eyes open",
