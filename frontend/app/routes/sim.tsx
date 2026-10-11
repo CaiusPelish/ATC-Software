@@ -2,6 +2,7 @@ import { Link } from "react-router";
 import { ArrowLeft, Eye, Flame } from "lucide-react";
 
 import type { Route } from "./+types/sim";
+import { ConflictAlerts } from "~/components/conflict-alerts";
 import { CrashChallenge } from "~/components/crash-challenge";
 import { DrowsinessMonitorDock } from "~/components/drowsiness-monitor-dock";
 import { GroundChart } from "~/components/ground-chart";
@@ -9,6 +10,7 @@ import { LoadingScreen } from "~/components/loading-screen";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
+import { useConflictAlerts } from "~/hooks/use-conflict-alerts";
 import { useCrashChallenge } from "~/hooks/use-crash-challenge";
 import { useSimState, type SimSource } from "~/hooks/use-sim-state";
 import { cn } from "~/lib/utils";
@@ -40,11 +42,13 @@ export default function Sim() {
   const { state, source } = useSimState();
   const challenge = useCrashChallenge(state);
   const live = source.mode === "live";
+  const conflictAlerts = useConflictAlerts(state, live);
   const label = sourceLabel[sourceKey(source)];
 
   return (
     <main className="relative h-svh overflow-hidden bg-background">
       <GroundChart className="absolute inset-0" state={state} live={live} />
+      <ConflictAlerts alerts={conflictAlerts} live={live} />
 
       <header className="pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-center gap-2 p-4 pr-16 sm:gap-3">
         <Button asChild variant="outline" size="icon" className="pointer-events-auto bg-scrim backdrop-blur">

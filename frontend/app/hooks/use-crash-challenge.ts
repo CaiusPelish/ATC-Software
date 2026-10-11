@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { placeName } from "~/lib/chart";
 import { assignRoute, holdVehicle, loadScenario } from "~/lib/sim-api";
 import type { SimulationState } from "~/lib/sim-state";
 
@@ -16,8 +17,13 @@ const CLEAR_AFTER_S = TOUCHDOWN_S + 20;
 export type ChallengePhase = "idle" | "intro" | "starting" | "running" | "caught" | "clear";
 
 export type Caught = {
+  /** "runway": a vehicle on the closed runway. "separation": a vehicle within 20 m of a plane. */
+  kind: "runway" | "separation";
   intruder: string;
-  arrival: string;
+  /** The other party: the landing arrival, or the plane the vehicle nearly hit. */
+  other: string;
+  /** Where it happened, e.g. "taxiway B" (separation only). */
+  where: string;
   /** How long before touchdown the incursion was flagged. */
   secondsBefore: number;
 };
@@ -80,15 +86,22 @@ export function useCrashChallenge(state: SimulationState | null) {
     if (phase === "starting" && state.time < 10 && state.vehicles.length > 0) setPhase("running");
     if (phase !== "running") return;
 
+    // Caught = a vehicle in a critical conflict: on the closed runway, or nose to nose with a plane.
     const vehicleIds = new Set(state.vehicles.map((v) => v.id));
-    const incursion = state.conflicts.find(
-      (c) => c.severity === "critical" && c.location.includes("/") && c.aircraft_ids.some((id) => vehicleIds.has(id)),
+    const hit = state.conflicts.find(
+      (c) => c.severity === "critical" && c.aircraft_ids.some((id) => vehicleIds.has(id)),
     );
-    if (incursion) {
-      const intruder = incursion.aircraft_ids.find((id) => vehicleIds.has(id))!;
-      const otherId = incursion.aircraft_ids.find((id) => id !== intruder);
-      const arrival = state.aircraft.find((a) => a.id === otherId)?.callsign ?? "the arrival";
-      setCaught({ intruder, arrival, secondsBefore: Math.max(0, Math.round(TOUCHDOWN_S - state.time)) });
+    if (hit) {
+      const intruder = hit.aircraft_ids.find((id) => vehicleIds.has(id))!;
+      const otherId = hit.aircraft_ids.find((id) => id !== intruder);
+      const runway = hit.location.includes("/");
+      setCaught({
+        kind: runway ? "runway" : "separation",
+        intruder,
+        other: state.aircraft.find((a) => a.id === otherId)?.callsign ?? (runway ? "the arrival" : otherId ?? "traffic"),
+        where: runway ? `runway ${RUNWAY}` : placeName(hit.location),
+        secondsBefore: Math.max(0, Math.round(TOUCHDOWN_S - state.time)),
+      });
       setPhase("caught");
     } else if (state.time > CLEAR_AFTER_S) {
       setPhase("clear");

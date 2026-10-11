@@ -90,16 +90,29 @@ export function CrashChallenge({ challenge }: { challenge: Challenge }) {
         >
           <CardHeader className="gap-1.5 px-4">
             <p className="flex items-center gap-2 font-mono text-[10px] tracking-[0.2em] text-destructive uppercase motion-safe:animate-pulse">
-              <TriangleAlert className="size-3.5" /> Runway incursion caught
+              <TriangleAlert className="size-3.5" />{" "}
+              {caught.kind === "runway" ? "Runway incursion caught" : "Conflict in path caught"}
             </p>
             <CardTitle className="text-lg">
-              {caught.intruder} is on runway {RUNWAY} with {caught.arrival} landing
+              {caught.kind === "runway"
+                ? `${caught.intruder} is on runway ${RUNWAY} with ${caught.other} landing`
+                : `${caught.intruder} came within 20 m of ${caught.other} on ${caught.where}`}
             </CardTitle>
             <CardDescription className="text-sm">
-              Caught <span className="font-semibold text-foreground">{caught.secondsBefore} s</span> before touchdown.
+              {caught.kind === "runway" ? (
+                <>
+                  Caught <span className="font-semibold text-foreground">{caught.secondsBefore} s</span> before touchdown.
+                </>
+              ) : (
+                "Caught before they collided."
+              )}
             </CardDescription>
             <p className="mt-1 rounded-md border border-border px-3 py-2 font-mono text-sm text-foreground">
-              ATC: &ldquo;{caught.intruder}, hold short of runway {RUNWAY}.&rdquo;
+              ATC: &ldquo;
+              {caught.kind === "runway"
+                ? `${caught.intruder}, hold short of runway ${RUNWAY}.`
+                : `${caught.intruder}, hold position.`}
+              &rdquo;
             </p>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2 px-4 pt-3">
