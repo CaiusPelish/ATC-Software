@@ -50,6 +50,18 @@ def _seconds(s):
     return f"{round(s)} s"
 
 
+def solution_phrase(vid, via):
+    """What the controller says when sending a solution path."""
+    if not via:
+        return f"{vid}, hold position, you are clear of traffic."
+    return f"{vid}, solution path via taxiway {' and '.join(via)}, then hold position."
+
+
+def _resolution(sim, mid, vehicles):
+    """A ground vehicle gets a solution path; an aircraft is told to hold."""
+    return f"{_name(sim, mid)}, solution path available." if mid in vehicles else f"{_name(sim, mid)}, hold position."
+
+
 def build_alerts(sim, fatigue_score: float) -> list[Alert]:
     """One alert per conflict (happening now) and per predicted collision.
 
@@ -82,18 +94,18 @@ def build_alerts(sim, fatigue_score: float) -> list[Alert]:
             text = (f"{_name(sim, a)} is on runway {c.location} with {_name(sim, b)} "
                     + (f"reaching it in {_seconds(soon)}." if soon > 0 else "on it."))
             add("runway", c.aircraft_ids, c.location, c.severity, text,
-                f"{_name(sim, stop)}, hold short of runway {c.location}.", c.seconds_to_conflict)
+                _resolution(sim, stop, vehicles), c.seconds_to_conflict)
         else:
             gap = "20" if c.severity == "critical" else "40"
             add("separation", c.aircraft_ids, c.location, c.severity,
                 f"{_name(sim, a)} and {_name(sim, b)} are less than {gap} m apart on {_place(c.location)}.",
-                f"{_name(sim, stop)}, hold position.")
+                _resolution(sim, stop, vehicles))
 
     for w in sim.state.warnings:
         a, b = (w.aircraft_ids + ["traffic"])[:2]
         add("predicted", w.aircraft_ids, w.location, "warning",
             f"{_name(sim, a)} will meet {_name(sim, b)} on {_place(w.location)} in {_seconds(w.eta)}.",
-            f"{_name(sim, a)}, hold position.", round(w.eta, 1))
+            _resolution(sim, a, vehicles), round(w.eta, 1))
 
     # Forget alerts that have ended, so the same pair later counts as new.
     for aid in [k for k in seen if k not in live_ids]:

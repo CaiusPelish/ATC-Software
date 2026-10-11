@@ -21,6 +21,20 @@ export type ConflictAlert = {
 
 const pairOf = (ids: string[]) => [...ids].sort().join("+");
 
+/** A ground vehicle involved gets a solution path; aircraft-only conflicts are told to hold. */
+const ending = (ids: string[], state: SimulationState) =>
+  ids.some((id) => state.vehicles.some((v) => v.id === id)) ? "Solution path available." : "Hold position.";
+
+/** Spoken form of a solution-path instruction from the backend ("TRUCK01, solution path via taxiway M and P, ..."). */
+export function speakSolution(phrase: string) {
+  return speakable(
+    phrase
+      .replace(/^([A-Z]+-?\d+)/, (m) => speakCallsign(m))
+      .replace(/taxiway ([A-Z0-9]+(?: and [A-Z0-9]+)*)/, (_, names: string) =>
+        speakPlace(`taxiway ${names.split(" and ").join("/")}`)),
+  );
+}
+
 const AIRLINES: Record<string, string> = {
   AAL: "American", BAW: "Speedbird", DAL: "Delta", JBU: "JetBlue", RPA: "Brickyard",
   SWA: "Southwest", UAL: "United", ASA: "Alaska", FFT: "Frontier", NKS: "Spirit",
@@ -85,7 +99,7 @@ export function describeConflict(conflict: Conflict, state: SimulationState): Co
       kind: "runway",
       title: "Runway incursion",
       text: `${a} is on ${runway} with ${b} using it.`,
-      spoken: speakable(`Runway incursion. ${speakCallsign(a)}, hold short. ${speakPlace(runway)}.`),
+      spoken: speakable(`Runway incursion, ${speakPlace(runway)}. ${speakCallsign(a)}. ${ending(conflict.aircraft_ids, state)}`),
     };
   }
 
@@ -96,7 +110,7 @@ export function describeConflict(conflict: Conflict, state: SimulationState): Co
     kind: "separation",
     title: "Conflict in path",
     text: `${a} and ${b} are ${close} apart on ${place}.`,
-    spoken: speakable(`Conflict in path. ${speakCallsign(a)} and ${speakCallsign(b)}, ${speakPlace(place)}. Hold position.`),
+    spoken: speakable(`Conflict in path. ${speakCallsign(a)} and ${speakCallsign(b)}, ${speakPlace(place)}. ${ending(conflict.aircraft_ids, state)}`),
   };
 }
 
@@ -120,7 +134,7 @@ export function describeWarning(warning: CollisionWarning, state: SimulationStat
     title: "Conflict in path",
     text: `${a} will meet ${b} on ${place} in ${seconds} s.`,
     spoken: speakable(
-      `Traffic alert. ${speakCallsign(a)}, conflict with ${speakCallsign(b)}, ${speakPlace(place)}, in ${seconds} seconds. Hold position.`,
+      `Traffic alert. ${speakCallsign(a)}, conflict with ${speakCallsign(b)}, ${speakPlace(place)}, in ${seconds} seconds. ${ending(warning.aircraft_ids, state)}`,
     ),
   };
 }

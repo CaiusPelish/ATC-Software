@@ -51,3 +51,10 @@ export function holdVehicle(id: string, hold: boolean) {
 export function spawnVehicle(id: string, position: string) {
   return post<GroundVehicle>("/api/vehicles", { id, position });
 }
+
+export type SolutionPath = { vehicle: GroundVehicle; destination: string; via: string[]; atc_phrase: string };
+
+/** Solution path: send a ground vehicle to the nearest spot off the runways and clear of `avoid`. */
+export function resolveVehicle(id: string, avoid: string[]) {
+  return post<SolutionPath>(`/api/vehicles/${encodeURIComponent(id)}/resolve`, { avoid });
+}

@@ -3,9 +3,9 @@ import unittest
 
 from app.alerts import fatigue
 from app.alerts.manager import calculate_alert_severity
-from app.routing.graph import airport_graph, ground_nodes
+from app.routing.graph import airport_graph, ground_kinds, ground_nodes
 from app.simulation.live import LiveSim
-from app.simulation.scenarios import load_scenario
+from app.simulation.scenarios import CHALLENGE_TOUCHDOWN_S, load_scenario
 
 TICK = 0.25
 
@@ -29,33 +29,46 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(fatigue.snapshot(now=1005.0)["score"], 80)
         self.assertEqual(fatigue.snapshot(now=1000.0 + fatigue.STALE_AFTER_S + 1)["score"], 0.0)
 
-    def test_runway_incursion_has_time_to_conflict_and_alert(self):
-        """challenge_01: the truck drives onto 22L while the arrival is on final."""
+    def _truck_on_runway(self):
+        """challenge_01 with the truck driven onto 22L once the runway has closed."""
         sim = load_scenario("challenge_01")
         first = next(a for a in sim.state.aircraft if a.status == "waiting")
         sim.route(first.id, first.destination)
         truck = ground_nodes[sim.state.vehicles[0].position]
         crossing = min((n for n in airport_graph if n.startswith("x_4R/22L")),
                        key=lambda n: math.dist((ground_nodes[n].lat, ground_nodes[n].lon), (truck.lat, truck.lon)))
-        run(sim, 75)  # the runway closes about 51 s before the 120 s touchdown
+        run(sim, 15)  # the runway closes about 51 s before touchdown
         sim.route_vehicle("TRUCK01", crossing)
-
-        conflict = None
         for _ in range(int(30 / TICK)):
             sim.tick(TICK)
             conflict = next((c for c in sim.state.conflicts if "/" in c.location and "TRUCK01" in c.aircraft_ids), None)
             if conflict:
-                break
-        self.assertIsNotNone(conflict, "truck on 22L should be a runway incursion")
+                return sim, conflict
+        self.fail("truck on 22L should be a runway incursion")
+
+    def test_runway_incursion_has_time_to_conflict_and_alert(self):
+        sim, conflict = self._truck_on_runway()
         self.assertIsNotNone(conflict.seconds_to_conflict)
         self.assertGreater(conflict.seconds_to_conflict, 0)  # the arrival is still on final
-        self.assertLess(conflict.seconds_to_conflict, 120 - 75)
+        self.assertLess(conflict.seconds_to_conflict, CHALLENGE_TOUCHDOWN_S - 15)
 
         alert = next(a for a in sim.state.alerts if a.kind == "runway")
         self.assertEqual(alert.severity, "critical")
         self.assertIn("TRUCK01", alert.text)
-        self.assertEqual(alert.atc_phrase, f"TRUCK01, hold short of runway {conflict.location}.")
+        self.assertEqual(alert.atc_phrase, "TRUCK01, solution path available.")
         self.assertEqual(alert.seconds, conflict.seconds_to_conflict)
+
+    def test_solution_path_takes_truck_off_the_runway(self):
+        sim, conflict = self._truck_on_runway()
+        vehicle, goal, via = sim.resolve_vehicle("TRUCK01", [i for i in conflict.aircraft_ids if i != "TRUCK01"])
+        self.assertFalse(ground_kinds[goal].startswith("runway"))
+        self.assertTrue(via, "the solution path should name the taxiway it uses")
+        self.assertEqual(vehicle.route[-1], goal)
+        run(sim, 5)  # it U-turns off the runway instead of driving on to the next node
+        self.assertFalse([c for c in sim.state.conflicts if "TRUCK01" in c.aircraft_ids])
+        run(sim, 15)
+        self.assertEqual(sim.state.vehicles[0].position, goal)
+        self.assertFalse([c for c in sim.state.conflicts if "TRUCK01" in c.aircraft_ids])
 
     def test_predicted_alert_escalates_with_fatigue(self):
         """A truck routed into a taxiing aircraft's path: medium when rested, high when tired."""
@@ -77,7 +90,7 @@ class AlertTests(unittest.TestCase):
         self.assertEqual(len(predicted), 1)
         self.assertEqual(predicted[0].severity, "medium")
         self.assertIn("will meet TST1", predicted[0].text)
-        self.assertEqual(predicted[0].atc_phrase, "TRUCK01, hold position.")
+        self.assertEqual(predicted[0].atc_phrase, "TRUCK01, solution path available.")
         created = predicted[0].created_s
 
         fatigue.report(85)

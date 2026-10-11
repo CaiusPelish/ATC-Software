@@ -20,9 +20,11 @@ from pydantic import BaseModel
 from .simulation.scenarios import load_scenario
 
 from .alerts import fatigue
+from .alerts.manager import solution_phrase
 from .models import (
     FatigueReport,
     HoldRequest,
+    ResolveRequest,
     RouteRequest,
     SpawnAircraftRequest,
     SpawnAircraftResponse,
@@ -266,6 +268,24 @@ async def spawn_vehicle(request: SpawnVehicleRequest):
 async def route_vehicle(vehicle_id: str, request: RouteRequest):
     """Shortest ground path from where the vehicle is; it crosses runways without asking."""
     return _act_vehicle(world.sim.route_vehicle, vehicle_id, request.destination)
+
+
+@app.post("/api/vehicles/{vehicle_id}/resolve")
+async def resolve_vehicle(vehicle_id: str, request: ResolveRequest):
+    """Solution path: drive the vehicle to the nearest spot off the runways and clear of
+    the traffic it conflicts with (request.avoid)."""
+    try:
+        vehicle, destination, via = world.sim.resolve_vehicle(vehicle_id, request.avoid)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Vehicle not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return {
+        "vehicle": vehicle.model_copy(deep=True),
+        "destination": destination,
+        "via": via,
+        "atc_phrase": solution_phrase(vehicle_id, via),
+    }
 
 
 @app.post("/api/vehicles/{vehicle_id}/hold")

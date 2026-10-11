@@ -10,6 +10,9 @@ from .live import ARRIVAL_RUNWAY, LiveSim
 # How far challenge_01's truck stays from where the arrivals will taxi, so
 # it raises nothing until the controller moves it.
 TRUCK_CLEARANCE_M = 100
+# challenge_01's arrival touches down this long after the scenario starts (the frontend's
+# challenge countdown uses the same number). The runway closes ~51 s before that.
+CHALLENGE_TOUCHDOWN_S = 75
 
 
 def _default():
@@ -56,7 +59,7 @@ def _truck_spot(sim, first):
 
 
 def _challenge_01():
-    """An arrival stopped on 22L at its exit, a truck parked by the runway, the next landing two minutes out.
+    """An arrival stopped on 22L at its exit, a truck parked by the runway, the next landing a minute out.
 
     Nothing is routed for you: get the first arrival off the runway before the
     second one touches down, or it's a runway incursion. The truck is out of
@@ -64,7 +67,7 @@ def _challenge_01():
     """
     sim = LiveSim(auto_spawn=False, auto_route=False, seed=1)
     first = sim.spawn_arrival(touchdown_s=-60)
-    sim.spawn_arrival(touchdown_s=120, force=True)
+    sim.spawn_arrival(touchdown_s=CHALLENGE_TOUCHDOWN_S, force=True)
     sim.add_vehicle("TRUCK01", [_truck_spot(sim, first)])
     sim.tick(0)
     return sim

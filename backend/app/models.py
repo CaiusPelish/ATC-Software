@@ -65,6 +65,11 @@ class Alert(BaseModel):
     audio_url: str | None = None  # spoken by the frontend's ElevenLabs route for now
 
 
+class ResolveRequest(BaseModel):
+    """Who the vehicle is in conflict with, so its solution path keeps clear of them."""
+    avoid: list[str] = Field(default_factory=list)
+
+
 class FatigueReport(BaseModel):
     """Sent by the browser's drowsiness monitor (MediaPipe) about once a second."""
     score: float = Field(ge=0, le=100)

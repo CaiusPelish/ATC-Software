@@ -1,4 +1,4 @@
-import { CheckCircle2, Flame, Hand, LogOut, RotateCcw, TriangleAlert } from "lucide-react";
+import { CheckCircle2, Flame, LogOut, RotateCcw, Route as RouteIcon, TriangleAlert } from "lucide-react";
 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -17,7 +17,14 @@ const swallow = {
 };
 
 /** Intro, live HUD and result banner for the judge's "try to cause a crash" demo. */
-export function CrashChallenge({ challenge }: { challenge: Challenge }) {
+export function CrashChallenge({
+  challenge,
+  onSolve,
+}: {
+  challenge: Challenge;
+  /** Sends the solution path for a conflict (useConflictAlerts().solve); resolves with its instruction. */
+  onSolve: (ids: string[]) => Promise<{ atc_phrase: string } | null>;
+}) {
   const { phase, caught, busy, touchdownIn, closesIn, runwayClosed } = challenge;
   if (phase === "idle") return null;
 
@@ -31,7 +38,7 @@ export function CrashChallenge({ challenge }: { challenge: Challenge }) {
             </p>
             <CardTitle className="text-xl">Try to cause a runway incursion</CardTitle>
             <CardDescription className="text-sm">
-              A plane lands on runway {RUNWAY} in 2 minutes. Drag fire truck TRUCK01 onto the runway while it's closed
+              A plane lands on runway {RUNWAY} in about a minute. Drag fire truck TRUCK01 onto the runway while it's closed
               for the landing and see if Hold Short catches it before touchdown.
             </CardDescription>
           </CardHeader>
@@ -84,14 +91,26 @@ export function CrashChallenge({ challenge }: { challenge: Challenge }) {
 
       {phase === "caught" && caught && (
         <Card
-          className="pointer-events-auto gap-0 border-destructive bg-card py-4 ring-2 ring-destructive/60"
+          className={cn(
+            "pointer-events-auto gap-0 bg-card py-4 ring-2 transition-colors duration-700",
+            caught.solution ? "border-beacon ring-beacon/40" : "border-destructive ring-destructive/60",
+          )}
           data-result="caught"
           {...swallow}
         >
           <CardHeader className="gap-1.5 px-4">
-            <p className="flex items-center gap-2 font-mono text-[10px] tracking-[0.2em] text-destructive uppercase motion-safe:animate-pulse">
-              <TriangleAlert className="size-3.5" />{" "}
-              {caught.kind === "runway" ? "Runway incursion caught" : "Conflict in path caught"}
+            <p
+              className={cn(
+                "flex items-center gap-2 font-mono text-[10px] tracking-[0.2em] uppercase",
+                caught.solution ? "text-beacon" : "text-destructive motion-safe:animate-pulse",
+              )}
+            >
+              {caught.solution ? <CheckCircle2 className="size-3.5" /> : <TriangleAlert className="size-3.5" />}{" "}
+              {caught.solution
+                ? "Solution path sent"
+                : caught.kind === "runway"
+                  ? "Runway incursion caught"
+                  : "Conflict in path caught"}
             </p>
             <CardTitle className="text-lg">
               {caught.kind === "runway"
@@ -108,17 +127,27 @@ export function CrashChallenge({ challenge }: { challenge: Challenge }) {
                 "Caught before they collided."
               )}
             </CardDescription>
-            <p className="mt-1 rounded-md border border-border px-3 py-2 font-mono text-sm text-foreground">
-              ATC: &ldquo;
-              {caught.kind === "runway"
-                ? `${caught.intruder}, hold short of runway ${RUNWAY}.`
-                : `${caught.intruder}, hold position.`}
-              &rdquo;
+            <p
+              className={cn(
+                "mt-1 rounded-md border px-3 py-2 font-mono text-sm text-foreground",
+                caught.solution ? "border-beacon/60" : "border-border",
+              )}
+              data-solution={caught.solution ? "sent" : "ready"}
+            >
+              {caught.solution
+                ? <>ATC: &ldquo;{caught.solution}&rdquo;</>
+                : `Solution path ready for ${caught.intruder}.`}
             </p>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2 px-4 pt-3">
-            <Button variant="destructive" onClick={() => void challenge.holdShort()}>
-              <Hand /> Issue hold short
+            <Button
+              disabled={!!caught.solution}
+              onClick={async () => {
+                const result = await onSolve(caught.ids);
+                if (result) challenge.markSolved(result.atc_phrase);
+              }}
+            >
+              <RouteIcon /> {caught.solution ? "Solution path sent" : "Solution path"}
             </Button>
             <Button variant="outline" onClick={() => void challenge.retry()} disabled={busy}>
               <RotateCcw /> Try again

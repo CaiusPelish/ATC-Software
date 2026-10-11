@@ -120,7 +120,7 @@ export default function Sim() {
 
       <DrowsinessMonitorDock />
 
-      <CrashChallenge challenge={challenge} />
+      <CrashChallenge challenge={challenge} onSolve={conflictAlerts.solve} />
 
       <Card className="pointer-events-none absolute bottom-4 left-4 gap-0 border-border bg-scrim py-3 backdrop-blur-md">
         <CardContent className="flex flex-col gap-2 px-4">

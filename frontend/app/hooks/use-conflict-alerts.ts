@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 
-import { describeConflict, describeWarning, type ConflictAlert } from "~/lib/alert-speech";
+import { describeConflict, describeWarning, speakSolution, type ConflictAlert } from "~/lib/alert-speech";
+import { resolveVehicle } from "~/lib/sim-api";
 import type { Alert, SimulationState } from "~/lib/sim-state";
 
 const LINGER_MS = 10_000; // an alert stays up this long after its conflict ends
@@ -8,6 +10,8 @@ const FLASH_TAIL_MS = 1_500; // the red flash keeps going briefly after a confli
 const REANNOUNCE_MS = 30_000; // the same conflict isn't spoken again within this window
 const ESCALATED_FATIGUE = 70; // backend fatigue score at which alerts get urgent
 const LOUD_GAIN = 1.8;
+const FADE_MS = 1_000; // a solved alert fades out over this long, then it's removed
+const RESOLVED_FORGET_MS = 5_000; // a solved pair can alert again once it's been quiet this long
 
 export type ShownAlert = ConflictAlert & {
   firstAt: number;
@@ -15,6 +19,8 @@ export type ShownAlert = ConflictAlert & {
   active: boolean;
   /** Set when the backend raised this alert because the controller is tired. */
   escalated?: { severity: Alert["severity"]; fatigue: number };
+  /** A solution path was sent for this pair: the card fades out. */
+  fadedAt?: number;
 };
 
 /** The backend's alert for a pair is escalated when fatigue pushed it to high, or it's critical on a tired controller. */
@@ -38,6 +44,12 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
   const audio = useRef<AudioContext | null>(null);
   const queue = useRef<{ text: string; gain: number }[]>([]);
   const speaking = useRef(false);
+  // Pairs a solution path was sent for -> when they were last seen in conflict.
+  const resolved = useRef(new Map<string, number>());
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
 
   // Browsers only allow sound after a user gesture: unlock audio on the first click.
   useEffect(() => {
@@ -100,10 +112,17 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
     const current = [...real, ...predicted];
     const currentKeys = new Set(current.map((c) => c.key));
 
+    // A solved pair stays quiet while its conflict winds down, then is forgotten.
+    const currentPairs = new Set(current.map((c) => c.pair));
+    for (const [pair, seen] of resolved.current) {
+      if (currentPairs.has(pair)) resolved.current.set(pair, now);
+      else if (now - seen > RESOLVED_FORGET_MS) resolved.current.delete(pair);
+    }
+
     setAlerts((prev) => {
       const byKey = new Map(prev.map((a) => [a.key, a]));
       for (const c of current) {
-        if (dismissed.current.has(c.key)) continue;
+        if (dismissed.current.has(c.key) || resolved.current.has(c.pair)) continue;
         const old = byKey.get(c.key);
         byKey.set(c.key, {
           ...c,
@@ -117,6 +136,7 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
       }
       return [...byKey.values()]
         .filter((a) => !(a.kind === "predicted" && realPairs.has(a.pair)))
+        .filter((a) => a.fadedAt === undefined || now - a.fadedAt < FADE_MS)
         .map((a) => (currentKeys.has(a.key) ? a : { ...a, active: now - a.lastAt < FLASH_TAIL_MS }))
         .filter((a) => now - a.lastAt < LINGER_MS)
         .sort((a, b) => b.firstAt - a.firstAt)
@@ -130,6 +150,7 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
       // One announcement per pair: the heads-up and the real conflict that follows it
       // aren't both spoken.
       for (const c of current) {
+        if (resolved.current.has(c.pair)) continue;
         const last = announced.current.get(c.pair);
         if (last === undefined || now - last > REANNOUNCE_MS) {
           announced.current.set(c.pair, now);
@@ -146,11 +167,51 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
     setAlerts((prev) => prev.filter((a) => a.key !== key));
   }, []);
 
+  /**
+   * Solution path for a conflict between `ids`: the ground vehicle among them is sent to the
+   * nearest spot off the runways and clear of the others. Its warnings then fade away.
+   */
+  const solve = useCallback(
+    async (ids: string[]) => {
+      const st = stateRef.current;
+      const vehicle = ids.find((id) => st?.vehicles.some((v) => v.id === id));
+      if (!vehicle) {
+        toast.error("No ground vehicle in this conflict to send a solution path to.");
+        return null;
+      }
+      const pair = [...ids].sort().join("+");
+      try {
+        const result = await resolveVehicle(vehicle, ids.filter((id) => id !== vehicle));
+        const now = performance.now();
+        resolved.current.set(pair, now);
+        setAlerts((prev) => prev.map((a) => (a.pair === pair ? { ...a, fadedAt: now, active: false } : a)));
+        toast.success(result.atc_phrase);
+        if (live && !mutedRef.current) {
+          queue.current.push({ text: speakSolution(result.atc_phrase), gain: 1 });
+          void playNext();
+        }
+        return result;
+      } catch (err) {
+        toast.error(`${vehicle}: ${err instanceof Error ? err.message : "no solution path"}`);
+        return null;
+      }
+    },
+    [live, playNext],
+  );
+
+  const canSolve = useCallback(
+    (alert: { ids: string[] }) => live && alert.ids.some((id) => state?.vehicles.some((v) => v.id === id)),
+    [live, state],
+  );
+
+  const showing = alerts.filter((a) => a.fadedAt === undefined);
   return {
     alerts,
-    flashing: alerts.some((a) => a.active && a.kind !== "predicted"),
+    flashing: showing.some((a) => a.active && a.kind !== "predicted"),
     /** Predicted meeting points still ahead, for the map. */
-    predicted: alerts.filter((a) => a.kind === "predicted" && a.active),
+    predicted: showing.filter((a) => a.kind === "predicted" && a.active),
+    solve,
+    canSolve,
     muted,
     toggleMute: () => setMuted((m) => !m),
     voiceError,

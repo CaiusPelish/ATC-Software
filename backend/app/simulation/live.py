@@ -32,7 +32,8 @@ from ..conflicts.detector import detect_conflicts
 from ..models import Aircraft, SimulationState, Vehicle
 from ..routing.airport import DT, TAXI_SPEED, get_airport
 from ..routing.astar import astar
-from ..routing.graph import airport_graph, runway_edges
+from ..routing.graph import airport_graph, ground_geometry, ground_kinds, ground_nodes, runway_edges
+from ..routing.osm_taxiways import edge_points, haversine_m
 from ..routing.mapf import AircraftRequest, plan_one
 from ..routing.reservations import ReservationTable
 from ..routing.runways import RunwayGate, exits, load_runways
@@ -70,6 +71,8 @@ REPAIR_RETRIES = 2
 ROLL_SPEED_MS = 1.5 * TAXI_SPEED
 # Fire trucks and other ground vehicles, about 40 kt.
 VEHICLE_SPEED_MS = 20.0
+# A solution path ends at least this far from where the conflicting traffic is going.
+RESOLVE_CLEARANCE_M = 60
 
 
 class NoRoute(ValueError):
@@ -452,7 +455,7 @@ class LiveSim:
 
     def route_vehicle(self, vid, destination, speed=VEHICLE_SPEED_MS):
         """Drive vid by the shortest ground path from where it is to destination."""
-        v = self.vehicle(vid)
+        self.vehicle(vid)
         if destination not in airport_graph:
             raise ValueError(f"{destination} is not a ground node")
         tr, t = self.tracks[vid], self.now
@@ -464,14 +467,86 @@ class LiveSim:
         found = astar(airport_graph, head[-1], destination)
         if found is None:
             raise ValueError(f"No ground path from {head[-1]} to {destination}")
-        new = Track(head + found["route"][1:], [(t, d - tr.cum[i])])
-        if new.length > new.points[0][1]:
-            new.points.append((t + (new.length - new.points[0][1]) / speed, new.length))
+        return self._drive(vid, head + found["route"][1:], d - tr.cum[i], speed)
+
+    def _drive(self, vid, route, start_d, speed):
+        """Put vid on route, start_d metres along it now, driving to its end."""
+        v, t = self.vehicle(vid), self.now
+        new = Track(route, [(t, start_d)])
+        if new.length > start_d:
+            new.points.append((t + (new.length - start_d) / speed, new.length))
         self.tracks[vid] = new
         v.route = new.route
         v.status = "taxiing" if len(new.points) > 1 else "waiting"
         self._update_vehicle(v, t)
         return v
+
+    def resolve_vehicle(self, vid, avoid=(), speed=VEHICLE_SPEED_MS):
+        """Solution path: the shortest drive to a spot off every runway and clear of the
+        conflicting traffic's way (avoid: their ids). Returns (vehicle, destination, via),
+        via being the taxiway names driven, in order."""
+        v = self.vehicle(vid)
+        tr, t = self.tracks[vid], self.now
+        d = tr.dist(t)
+        i = tr.index(d)
+        # Between two nodes a vehicle can go on to the next one or U-turn back to the last.
+        mid_edge = i < len(tr.route) - 1 and d > tr.cum[i] + 1e-6
+        back, ahead = tr.route[i], tr.route[i + 1] if mid_edge else None
+        seeds = {back: d - tr.cum[i], ahead: tr.cum[i + 1] - d} if mid_edge else {back: 0.0}
+
+        # Everywhere the others are now or are about to be.
+        danger = []
+        for other in avoid:
+            otr = self.tracks.get(other)
+            if otr is None:
+                continue
+            j = otr.index(otr.dist(t))
+            coming = otr.route[j:]
+            danger += [(ground_nodes[n].lat, ground_nodes[n].lon) for n in coming[:1]]
+            for a, b in zip(coming, coming[1:]):
+                danger += [tuple(p) for p in edge_points(ground_nodes, ground_geometry, a, b)]
+        # An arrival still on final is heading for the runway, which is excluded anyway.
+
+        def clear(n):
+            g = ground_nodes[n]
+            return all(haversine_m(g.lat, g.lon, *p) >= RESOLVE_CLEARANCE_M for p in danger)
+
+        on_runway = {n for n, kind in ground_kinds.items() if kind.startswith("runway")}
+        # Dijkstra from where it is: the first node off the runways and clear of traffic wins.
+        best, prev = dict(seeds), {}
+        queue = [(w, n) for n, w in seeds.items()]
+        heapq.heapify(queue)
+        goal = None
+        while queue:
+            dist, n = heapq.heappop(queue)
+            if dist > best[n]:
+                continue
+            if n not in on_runway and clear(n):
+                goal = n
+                break
+            for m, w in airport_graph[n].items():
+                if dist + w < best.get(m, math.inf):
+                    best[m], prev[m] = dist + w, n
+                    heapq.heappush(queue, (dist + w, m))
+        if goal is None:
+            raise ValueError(f"No spot clear of traffic is reachable from {back}")
+
+        path = [goal]
+        while path[-1] in prev:
+            path.append(prev[path[-1]])
+        path.reverse()
+        via = []
+        for n in path:
+            for name in ground_nodes[n].taxiways:
+                if not name.startswith(("way_", "RWY")) and name not in via:
+                    via.append(name)
+        if goal == v.position and v.status != "taxiing":
+            return v, goal, via  # already somewhere safe: stay put
+        if not mid_edge:
+            return self._drive(vid, path, 0.0, speed), goal, via
+        if path[0] == back:  # U-turn: drive the current edge backwards
+            return self._drive(vid, [ahead] + path, tr.cum[i + 1] - d, speed), goal, via
+        return self._drive(vid, [back] + path, d - tr.cum[i], speed), goal, via
 
     def hold_vehicle(self, vid, hold, speed=VEHICLE_SPEED_MS):
         """Stop vid where it is (hold=True), or carry on along its route (hold=False)."""

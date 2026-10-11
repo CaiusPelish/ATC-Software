@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { chart, placeName } from "~/lib/chart";
-import { assignRoute, holdVehicle, loadScenario } from "~/lib/sim-api";
+import { assignRoute, loadScenario } from "~/lib/sim-api";
 import type { SimulationState } from "~/lib/sim-state";
 
 // Timings of the backend's challenge_01 scenario (backend/app/simulation/scenarios.py):
@@ -10,7 +10,7 @@ import type { SimulationState } from "~/lib/sim-state";
 // LOCK_NM = 2 nm out at 140 kt (arrivals.py): 2 * 1852 / (140 * 0.5144) ≈ 51.4 s before.
 const SCENARIO = "challenge_01";
 export const RUNWAY = "22L";
-const TOUCHDOWN_S = 120;
+const TOUCHDOWN_S = 75; // = CHALLENGE_TOUCHDOWN_S in backend scenarios.py
 const LOCK_S = 51.4;
 const CLEAR_AFTER_S = TOUCHDOWN_S + 20;
 // The arrival is on final at 140 kt (arrivals.py APPROACH_KT); the chart is Web Mercator
@@ -44,6 +44,10 @@ export type Inbound = { x: number; y: number; heading: number; label: string; cl
 export type ChallengePhase = "idle" | "intro" | "starting" | "running" | "caught" | "clear";
 
 export type Caught = {
+  /** Everyone in the conflict (backend ids), for the solution path. */
+  ids: string[];
+  /** The solution path instruction once one was sent. */
+  solution?: string;
   /** "runway": a vehicle on the closed runway. "separation": a vehicle within 20 m of a plane. */
   kind: "runway" | "separation";
   intruder: string;
@@ -97,15 +101,10 @@ export function useCrashChallenge(state: SimulationState | null) {
     }
   }, []);
 
-  const holdShort = useCallback(async () => {
-    if (!caught) return;
-    try {
-      await holdVehicle(caught.intruder, true);
-      toast.success(`${caught.intruder}, hold short of runway ${RUNWAY}.`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Hold instruction failed.");
-    }
-  }, [caught]);
+  /** The solution path was sent (by the conflict alerts' solve): show it on the banner. */
+  const markSolved = useCallback((phrase: string) => {
+    setCaught((c) => (c ? { ...c, solution: phrase } : c));
+  }, []);
 
   useEffect(() => {
     if (!state) return;
@@ -123,6 +122,7 @@ export function useCrashChallenge(state: SimulationState | null) {
       const otherId = hit.aircraft_ids.find((id) => id !== intruder);
       const runway = hit.location.includes("/");
       setCaught({
+        ids: hit.aircraft_ids,
         kind: runway ? "runway" : "separation",
         intruder,
         other: state.aircraft.find((a) => a.id === otherId)?.callsign ?? (runway ? "the arrival" : otherId ?? "traffic"),
@@ -172,6 +172,6 @@ export function useCrashChallenge(state: SimulationState | null) {
     retry: begin,
     exit,
     cancel: () => setPhase("idle"),
-    holdShort,
+    markSolved,
   };
 }
