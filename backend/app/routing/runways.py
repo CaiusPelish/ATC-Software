@@ -200,10 +200,16 @@ class RunwayGate:
     rolling_out=pair lets an arrival that starts its taxi still on the runway
     it landed on keep moving along it to an exit (but not wait there), as
     runway_conflicts does; the landing behind it was cleared knowing it would.
+
+    crossings_overlap=True lets several aircraft cross a runway at once, as
+    controllers clear a line of crossers together: a crossing then ignores
+    other crossings, but still waits for landings and takeoffs, and a takeoff
+    still waits for every crossing.
     """
 
-    def __init__(self, runways, airport=None):
+    def __init__(self, runways, airport=None, crossings_overlap=False):
         ap = self.airport = airport or get_airport()
+        self.crossings_overlap = crossings_overlap
         self.runways = {r.pair: r for r in runways}
         self.windows = {pair: [] for pair in self.runways}
         self.on = {pair: on_runway_nodes(r) for pair, r in self.runways.items()}
@@ -217,11 +223,17 @@ class RunwayGate:
     def add_window(self, pair, t0, t1, label="", kind="landing"):
         self.windows[pair].append((t0, t1, label, kind))
 
+    def ignores(self, kind, pair, departs_from=None):
+        """True if a window of this kind on pair doesn't block an aircraft departing from departs_from."""
+        if pair == departs_from:
+            return kind == "takeoff"
+        return self.crossings_overlap and kind == "crossing"
+
     def busy(self, pair, t0, t1, aid=None, departs_from=None):
         return any(
             w0 < t1 and t0 < w1
             for w0, w1, label, kind in self.windows[pair]
-            if label != aid and not (kind == "takeoff" and pair == departs_from)
+            if label != aid and not self.ignores(kind, pair, departs_from)
         )
 
     def runways_touched(self, u, v):
@@ -290,7 +302,8 @@ def runway_conflicts(gate, paths, departs_from=None):
     An aircraft whose path starts on a runway (an arrival at its exit) is
     still rolling out until it first leaves that runway, so that part is
     skipped. departs_from {aid: pair} exempts departures lining up on their
-    own runway from other takeoff windows there, as RunwayGate.for_aircraft does.
+    own runway from other takeoff windows there, as RunwayGate.for_aircraft does;
+    with gate.crossings_overlap, crossings don't count against each other.
     """
     ap = get_airport()
     departs_from = departs_from or {}
@@ -309,7 +322,7 @@ def runway_conflicts(gate, paths, departs_from=None):
                     t = t0 + k
                     if r.on_runway_xy(px, py, margin=ZONE_M / 2) and any(
                         w0 <= t < w1 and lbl != aid
-                        and not (kind == "takeoff" and departs_from.get(aid) == pair)
+                        and not gate.ignores(kind, pair, departs_from.get(aid))
                         for w0, w1, lbl, kind in gate.windows[pair]
                     ):
                         found.append((aid, pair, t))

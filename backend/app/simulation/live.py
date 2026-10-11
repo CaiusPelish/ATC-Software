@@ -280,7 +280,7 @@ class LiveSim:
             self._update_vehicle(v, t)
         self._drop_finished(t)
 
-        self.state.conflicts = detect_conflicts(self)
+        self.state.conflicts, self.state.warnings = detect_conflicts(self)
         return self.state
 
     def _update_aircraft(self, a, t):

@@ -56,7 +56,7 @@ class BatchResult:
 
 
 def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, edge_allowed_for=None,
-               order=None, max_delay_retries=6, hold_starts=0, on_planned=None):
+               order=None, max_delay_retries=6, hold_starts=0, on_planned=None, finish_allowed_for=None):
     """Plan every request; returns a BatchResult. Mutates `reservations` if given.
 
     order(airport, requests) -> [aircraft ids] picks who goes first; defaults
@@ -71,6 +71,7 @@ def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, edge_
 
     on_planned(request, path) is called after each aircraft is planned, before
     the next one, e.g. to close the runways it uses (RunwayGate.claim).
+    finish_allowed_for(request) -> finish_allowed (see spacetime_astar.plan) or None.
     """
     reservations = reservations if reservations is not None else ReservationTable()
     by_id = {r.id: r for r in requests}
@@ -91,7 +92,8 @@ def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, edge_
             reservations.remove_path(placeholder.pop(aid))
         gate = edge_allowed_for(r) if edge_allowed_for else edge_allowed
         planned = plan_one(airport, r, reservations, edge_allowed=gate,
-                           max_delay_retries=max_delay_retries)
+                           max_delay_retries=max_delay_retries,
+                           finish_allowed=finish_allowed_for(r) if finish_allowed_for else None)
         if planned.ok:
             reservations.add_path(aid, planned.path, park_at_goal=r.goal_hold is None and r.hold_until is None)
             result.paths[aid] = planned.path
@@ -106,7 +108,7 @@ def plan_batch(airport, requests, reservations=None, *, edge_allowed=None, edge_
     return result
 
 
-def plan_one(airport, request, reservations, *, edge_allowed=None, max_delay_retries=6):
+def plan_one(airport, request, reservations, *, edge_allowed=None, max_delay_retries=6, finish_allowed=None):
     """Space-time A* for one request, with delay-and-retry. Does not reserve the result."""
     r = request
     planned = None
@@ -117,7 +119,7 @@ def plan_one(airport, request, reservations, *, edge_allowed=None, max_delay_ret
         planned = spacetime_astar.plan(
             airport, r.id, r.start, r.goal, t_start, reservations,
             edge_allowed=edge_allowed, max_t=max(t_start + horizon, (r.hold_until or 0) + horizon),
-            goal_hold=r.goal_hold, hold_until=r.hold_until,
+            goal_hold=r.goal_hold, hold_until=r.hold_until, finish_allowed=finish_allowed,
         )
         if planned.ok:
             return planned
