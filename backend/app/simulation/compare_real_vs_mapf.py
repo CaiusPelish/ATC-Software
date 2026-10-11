@@ -6,44 +6,41 @@ Every aircraft in the 2-hour Amelia recording with a complete taxi is used:
 departures from first appearing on the ground until their takeoff roll,
 arrivals from vacating the runway until their last ground point. Each one's
 first and last taxi points are snapped to the taxiway graph, and all of them
-are planned together with prioritized space-time A*, released at the moment
-they really started to taxi.
+are planned together with prioritized space-time A*.
 
-The planner gets the real runway schedule (runway_schedule.py):
-- every real landing and takeoff closes its runway (RunwayGate), so MAPF
-  aircraft can't cross in front of them;
-- each departure holds at its line-up point until its real takeoff slot,
-  so departures still queue for the runway the way they really did.
-Both sides are therefore timed to the same events: a departure is done when
-its real takeoff roll starts, an arrival when it reaches its last ground point.
+Only the spawn times are real: each aircraft is released when it really
+started to taxi, and gets to its destination as soon as the planner can get
+it there. A departure takes off when it reaches its line-up point and the
+runway is free, not at its real takeoff time. Runway rules:
+- a real landing holds its runway from 2 nm out until it has vacated;
+- a takeoff roll holds its runway for TAKEOFF_ROLL_S; crossings and rollouts
+  hold it while they are on it;
+- takeoffs from the same runway start at least TAKEOFF_SPACING_S apart;
+- arrivals always have right of way: they are planned before any departure.
 
-Outputs (in app/simulation/data/plans/):
-  real_vs_mapf.gif        left: real ADS-B positions, right: MAPF plan, same clock
-  real_vs_mapf_stats.png  taxi time, speed, moving vs holding, distance
-  real_vs_mapf.csv        one row per aircraft
+Prints real vs MAPF tables to the terminal and writes
+app/simulation/data/plans/real_vs_mapf.csv (one row per aircraft).
+--gif also renders data/plans/pitch/compare.gif.
 
-Not modelled on the MAPF side: pushback and gates, speed changes (it taxis at
-a constant 8 m/s), and ATC workload. A departure that reaches the runway
-after its real slot takes off when it gets there; the runway schedule isn't
-re-sequenced around it.
+Not modelled on the MAPF side: pushback and gates, speed changes (constant
+taxi speed), and ATC workload.
 
 Run from backend/:
-    python3 -m app.simulation.compare_real_vs_mapf [--minutes 120] [--stride 10]
+    python3 -m app.simulation.compare_real_vs_mapf [--speed-kt 9] [--gif]
 """
 
 import argparse
 import csv
-import json
 import math
 import statistics
 import time
-from dataclasses import replace
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 from matplotlib.animation import FuncAnimation, PillowWriter  # noqa: E402
 
 from ..routing.airport import DT, get_airport  # noqa: E402
@@ -66,30 +63,20 @@ from .traffic import (  # noqa: E402
 )
 
 KT = 0.5144  # m/s per knot
-DEPARTURE_HOLD = 60 // DT   # line-up and takeoff roll, when there is no slot to wait for
-LINE_UP_STEPS = 1           # minimum time on the line-up point before the slot
 ARRIVAL_HOLD = 20 // DT     # handed to ramp control
-# A takeoff closes its runway to crossings from just before the roll until lift-off.
-TAKEOFF_CLOSE_BEFORE_S = 10
+LINE_UP_STEPS = 1           # a departure's time on its line-up point before it rolls
+# A takeoff roll keeps crossings and landings off its runway this long.
+TAKEOFF_ROLL_S = 40
+TAKEOFF_ROLL = math.ceil(TAKEOFF_ROLL_S / DT)
+# Takeoffs from the same runway start at least this far apart.
+TAKEOFF_SPACING_S = 35
+TAKEOFF_SPACING = math.ceil(TAKEOFF_SPACING_S / DT)
 # Spacing, as in RealVsMapfTest's realistic mode: distance kept behind the
 # aircraft ahead on the same taxiway, and clearance around every node.
 FOLLOW_M = 150
 NODE_CLEAR_M = 60
-# Gate hold: a departure released this many steps before it must leave to make
-# its slot, and how many times a release that misses the slot is moved earlier.
-GATE_HOLD_MARGIN = 2
-GATE_HOLD_ROUNDS = 6
-# Fuel burned taxiing: a two-engine narrowbody at ICAO idle (CFM56 ~0.1 kg/s per engine).
-TAXI_FUEL_KG_PER_MIN = 12
-CO2_PER_KG_FUEL = 3.16
-# GIF: how far out arrivals on final are drawn, their speed, and how close to a
-# runway a stopped real aircraft counts as holding short for it.
-FINAL_DRAW_M = 700
-APPROACH_KT = 140
-HOLD_SHORT_M = 120
-# A departure this close (straight line) to its line-up point is in the takeoff queue.
+# GIF: a departure this close (straight line) to its line-up point is in the takeoff queue.
 QUEUE_M = 600
-MAX_QUEUE_LABELS = 12
 
 # Reference palette: categorical slots 1 and 2, text and surface tokens.
 REAL = "#2a78d6"
@@ -102,7 +89,6 @@ SURFACE = "#fcfcfb"
 TAXIWAY = "#c9ccd1"
 RUNWAY = "#8a8f98"
 IN_USE = "#d03b3b"
-CLEAR = "#2e8b57"
 QUEUE = "#e09a00"
 
 
@@ -151,104 +137,89 @@ def load_flights(df, uses):
     return flights
 
 
-def build_gate(ap, uses):
-    """RunwayGate closed for every real landing (2 nm final to vacated) and takeoff roll."""
+def build_gate(ap, uses, crossings_overlap=False):
+    """RunwayGate closed for every real landing, from 2 nm final until it vacated.
+
+    Real takeoffs are not in it: MAPF departures take off when they can.
+    crossings_overlap: see RunwayGate.
+    """
     runways = load_runways()
-    gate = RunwayGate([runways["4L"], runways["4R"]], airport=ap)
+    gate = RunwayGate([runways["4L"], runways["4R"]], airport=ap, crossings_overlap=crossings_overlap)
     for u in uses:
-        start = u.busy_from if u.kind == "landing" else u.roll_start - TAKEOFF_CLOSE_BEFORE_S
-        gate.add_window(u.pair, int(start // DT), math.ceil(u.busy_until / DT), u.id, u.kind)
+        if u.kind == "landing":
+            gate.add_window(u.pair, int(u.busy_from // DT), math.ceil(u.busy_until / DT), u.id, "landing")
     return gate
 
 
-def make_requests(flights, t0, with_schedule=True):
+def make_requests(flights, t0):
+    """Released at the real spawn time; a departure rolls one step after reaching its line-up point."""
     requests = []
     for f in flights:
         ready = (int(f["rows"]["UnixTime"].iloc[0]) - t0) // DT
-        if f["kind"] == "arrival":
-            requests.append(AircraftRequest(f["id"], f["start"], f["goal"], ready, goal_hold=ARRIVAL_HOLD))
-        elif with_schedule:
-            requests.append(AircraftRequest(f["id"], f["start"], f["goal"], ready, goal_hold=LINE_UP_STEPS,
-                                            hold_until=math.ceil(f["slot_s"] / DT)))
-        else:
-            requests.append(AircraftRequest(f["id"], f["start"], f["goal"], ready, goal_hold=DEPARTURE_HOLD))
+        hold = LINE_UP_STEPS if f["kind"] == "departure" else ARRIVAL_HOLD
+        requests.append(AircraftRequest(f["id"], f["start"], f["goal"], ready, goal_hold=hold))
     return requests
 
 
-def arrivals_first(airport, requests):
-    """Arrivals always have right of way: every arrival is planned before any departure.
+def planner(ap, gate, flights, node_buffer, follow_gap, progress=None, arrivals_first=True):
+    """plan(requests) -> BatchResult under the runway rules in the module docstring.
 
-    Within each group, in the order they appear. Departures (hold_until set)
-    then route around the arrivals' paths and the runways they hold.
-    """
-    return [r.id for r in sorted(requests, key=lambda r: (r.hold_until is not None, r.ready_t, r.id))]
-
-
-def planner(ap, gate, flights, node_buffer, follow_gap):
-    """plan(requests) -> BatchResult with the real runway schedule, runway-in-use flags and realistic spacing.
-
-    Each planned aircraft claims every runway it crosses, lines up on or rolls
-    out along (RunwayGate.claim) for the steps it is there; anyone planned
-    after it waits short of that runway until it is clear. The gate keeps the
-    real landings and takeoffs; each call starts again from just those.
+    Arrivals are planned first, then departures, each group in the order they
+    appear; arrivals_first=False plans everyone in the order they appear, so
+    an arrival can find the runway it must cross taken by departures planned
+    before it and queue at the hold-short line.
+    progress(request, path) is called after each aircraft is planned. Every planned aircraft closes each runway it is on for that time;
+    a departure's takeoff roll closes its runway for TAKEOFF_ROLL_S and may
+    only start when nobody else holds the runway and the last takeoff from it
+    started TAKEOFF_SPACING_S or more before.
     """
     departs_from = {f["id"]: f["pair"] for f in flights if f["kind"] == "departure"}
     # Arrivals that start their taxi still on the runway they landed on.
     rolling_out = {f["id"]: next((p for p, nodes in gate.on.items() if f["start"] in nodes), None)
                    for f in flights if f["kind"] == "arrival"}
-    real_windows = {pair: list(w) for pair, w in gate.windows.items()}
+    rolls = {}  # pair -> [step each planned takeoff roll starts]
+
+    def order(airport, requests):
+        return [r.id for r in sorted(requests, key=lambda r: (
+            arrivals_first and r.id in departs_from, r.ready_t, r.id))]
+
+    def takeoff_clear(r):
+        pair = departs_from.get(r.id)
+        if pair is None:
+            return None
+
+        def clear(t):
+            roll = t + r.goal_hold
+            if any(abs(roll - s) < TAKEOFF_SPACING for s in rolls.get(pair, ())):
+                return False
+            # Other departures lined up or rolling are spaced above; anything else must be off the runway.
+            return not any(w0 < roll + TAKEOFF_ROLL and roll < w1
+                           for w0, w1, label, kind in gate.windows[pair] if label != r.id and kind != "takeoff")
+        return clear
+
+    def claim(r, path):
+        pair = departs_from.get(r.id)
+        for p, t0, t1 in gate.occupancy(path):
+            gate.add_window(p, t0, t1, r.id, "takeoff" if p == pair else "crossing")
+        if pair:
+            roll = path[-1][1]
+            gate.add_window(pair, roll, roll + TAKEOFF_ROLL, r.id, "takeoff")
+            rolls.setdefault(pair, []).append(roll)
+        if progress:
+            progress(r, path)
 
     def plan(requests):
-        gate.windows = {pair: list(w) for pair, w in real_windows.items()}
+        rolls.clear()
         return plan_batch(
             ap, requests, ReservationTable(node_buffer, follow_gap),
             edge_allowed_for=lambda r: gate.for_aircraft(r.id, departs_from.get(r.id), rolling_out.get(r.id)),
-            order=arrivals_first,
+            order=order,
             max_delay_retries=10,  # aircraft that appear inside a queue wait to join it
             hold_starts=2,         # everyone's starting spot is theirs when they appear
-            on_planned=lambda r, path: gate.claim(r.id, path, departs_from.get(r.id)),
+            on_planned=claim,
+            finish_allowed_for=takeoff_clear,
         )
     return plan, departs_from
-
-
-def reached_goal(request, path):
-    """Step the path first reaches its goal and stays there."""
-    k = len(path) - 1
-    while k > 0 and path[k - 1][0] == request.goal:
-        k -= 1
-    return path[k][1]
-
-
-def moving_steps(path):
-    return sum(t1 - t0 for (u, t0), (v, t1) in zip(path, path[1:]) if u != v)
-
-
-def gate_hold(plan, requests, base):
-    """Hold each departure at the gate, engines off, and release it just in time for its real slot.
-
-    Starts from the waiting each departure did in the base plan, replans
-    everyone with the later releases, and halves the hold of any departure
-    that would now miss its slot, until none does. Returns (BatchResult,
-    shifted requests, {aid: steps held at the gate}).
-    """
-    by_id = {r.id: r for r in requests}
-    held = {}
-    for aid, path in base.paths.items():
-        r = by_id[aid]
-        if r.hold_until is not None and reached_goal(r, path) <= r.hold_until:
-            spare = r.hold_until - LINE_UP_STEPS - r.ready_t - moving_steps(path)
-            held[aid] = max(0, spare - GATE_HOLD_MARGIN)
-
-    for attempt in range(GATE_HOLD_ROUNDS + 1):
-        shifted = [replace(r, ready_t=r.ready_t + held.get(r.id, 0)) for r in requests]
-        result = plan(shifted)
-        late = [aid for aid, h in held.items() if h and (
-            aid not in result.paths or reached_goal(by_id[aid], result.paths[aid]) > by_id[aid].hold_until)]
-        if not late:
-            return result, shifted, held
-        for aid in late:
-            held[aid] = 0 if attempt == GATE_HOLD_ROUNDS - 1 else held[aid] // 2
-    return result, shifted, held
 
 
 def busiest_window(flights, minutes, t0):
@@ -263,6 +234,11 @@ def busiest_window(flights, minutes, t0):
         if load > best:
             best, best_s = load, start
     return best_s
+
+
+def takeoff_step(request, path):
+    """Step a departure reaches its line-up point; it rolls goal_hold steps later."""
+    return path[-1][1] - request.goal_hold
 
 
 def real_metrics(rows):
@@ -285,9 +261,8 @@ def real_metrics(rows):
 
 
 def planned_metrics(ap, request, path):
-    # A scheduled departure is done when it leaves the line-up point (its roll
-    # starts); anything else when it reaches its goal.
-    end = path[-1][1] if request.hold_until is not None else path[-1][1] - request.goal_hold
+    # A departure is done when its takeoff starts, an arrival when it reaches its goal.
+    end = path[-1][1] - request.goal_hold
     moves = [(u, v, t0, t1) for (u, t0), (v, t1) in zip(path, path[1:]) if u != v and t1 <= end]
     moving = sum(t1 - t0 for _, _, t0, t1 in moves) * DT
     duration = (end - request.ready_t) * DT
@@ -329,42 +304,32 @@ def draw_airport(ax, ap, runways):
     return lines
 
 
-def runway_wait(gate, path, step):
-    """Runway pair the aircraft is waiting for at `step` (holding short or lined up), or None."""
-    for k, ((u, t0), (v, t1)) in enumerate(zip(path, path[1:])):
-        if not t0 <= step < t1:
-            continue
-        if u != v:
-            return None
-        lined_up = next((p for p, nodes in gate.on.items() if u in nodes), None)
-        if lined_up:
-            return lined_up
-        nxt = next((n for n, _ in path[k + 1:] if n != u), None)
-        touched = gate.runways_touched(u, nxt) if nxt else []
-        return touched[0] if touched else None
-    return None
+def delay_series(rows, finish, t_end):
+    """(times s, real avg min, MAPF avg min): average delay of every aircraft finished by each minute.
+
+    Delay is taxi time beyond an unimpeded taxi at the planner's speed; MAPF's
+    is with engines running (a departure held at the gate isn't delayed yet).
+    """
+    times = np.arange(0, t_end + 60, 60)
+    out = {}
+    for side, key in (("real", "real_delay_s"), ("mapf", "mapf_engine_delay_s")):
+        done = sorted((finish[side][r["id"]], r[key] / 60) for r in rows if r["id"] in finish[side])
+        series, total, k = [], 0.0, 0
+        for t in times:
+            while k < len(done) and done[k][0] <= t:
+                total += done[k][1]
+                k += 1
+            series.append(total / k if k else np.nan)
+        out[side] = np.array(series)
+    return times, out["real"], out["mapf"]
 
 
-def on_final(uses, runways, t, max_m=FINAL_DRAW_M):
-    """[(lat, lon)] of real arrivals on final at t (seconds), on the extended centreline."""
-    found = []
-    for u in uses:
-        if u.kind == "landing" and u.busy_from <= t < u.roll_start:
-            out_m = (u.roll_start - t) * APPROACH_KT * KT
-            if out_m <= max_m:
-                found.append(runways[u.pair.split("/")[0]].point(-out_m))
-    return found
+def animate(ap, flights, requests, result, gate, real_windows, rows, t0, minutes, stride, out, start_s=0):
+    """Real ADS-B next to the plan, with a running average-delay chart underneath.
 
-
-def animate(ap, flights, requests, result, gate, real_windows, uses, t0, minutes, stride, out, start_s=0):
-    """Real ADS-B next to the plan, with each runway flagged IN USE or CLEAR on each side.
-
-    Real side: the real landings and takeoffs. Plan side: those plus the
-    runway time every planned aircraft claimed (crossings, line-ups, rollouts).
-    Arrivals on final are drawn on both sides; a red ring is an aircraft
-    waiting for a runway to clear. Departures near their line-up point are
-    numbered in takeoff order (their real slot, the same on both sides); an
-    amber ring is one waiting behind another departure.
+    Runways turn red while in use (real side: real landings and takeoffs;
+    plan side: those plus the planned aircraft's crossings and line-ups).
+    An amber ring is a departure waiting behind another for takeoff.
     """
     runways = load_runways()
     strips = [runways["4L"], runways["4R"]]  # the recording is in north-east flow
@@ -377,21 +342,25 @@ def animate(ap, flights, requests, result, gate, real_windows, uses, t0, minutes
     real_gate = RunwayGate(strips, airport=ap)
     real_gate.windows = real_windows
     kinds = {f["id"]: f["kind"] for f in flights}
-    # Takeoff queue: runway, slot and line-up point (x, y) of every departure.
     lineup = {f["id"]: (f["pair"], f["slot_s"], ap.xy[f["goal"]]) for f in flights if f["kind"] == "departure"}
 
-    fig, (ax_real, ax_plan) = plt.subplots(1, 2, figsize=(12, 9), facecolor=SURFACE)
-    fig.subplots_adjust(left=0.01, right=0.99, top=0.87, bottom=0.07, wspace=0.03)
+    def plan_done(aid):
+        return takeoff_step(by_id[aid], result.paths[aid])
+
+    finish = {"real": {aid: tr[0][-1] for aid, tr in real_tracks.items()},
+              "mapf": {aid: plan_done(aid) * DT for aid in result.paths}}
+    t_end = max(max(finish["real"].values()), max(finish["mapf"].values()))
+    times, real_avg, plan_avg = delay_series(rows, finish, t_end)
+
+    fig = plt.figure(figsize=(12, 10), facecolor=SURFACE)
+    grid = fig.add_gridspec(2, 2, height_ratios=[2.6, 1], hspace=0.16, wspace=0.03,
+                            left=0.06, right=0.98, top=0.9, bottom=0.07)
+    ax_real, ax_plan = fig.add_subplot(grid[0, 0]), fig.add_subplot(grid[0, 1])
     panels = []
-    for ax, side_gate, colour, title in ((ax_real, real_gate, REAL, "Real — ADS-B positions"),
-                                         (ax_plan, gate, MAPF, "Hold Short — arrivals first, runway-in-use flags")):
+    for ax, side_gate, colour, title in ((ax_real, real_gate, REAL, "Real (ADS-B)"),
+                                         (ax_plan, gate, MAPF, "Hold Short")):
         lines = draw_airport(ax, ap, strips)
-        # Room for arrivals on final, south-west of the 4L/4R thresholds.
-        for rw in strips:
-            lat, lon = rw.point(-FINAL_DRAW_M)
-            ax.update_datalim([(lon, lat)])
-        ax.autoscale_view()
-        ax.set_title(title, fontsize=13, weight="bold", color=colour, loc="left")
+        ax.set_title(title, fontsize=14, weight="bold", color=colour, loc="left")
         dots = {
             kind: ax.scatter([], [], s=34, marker=marker, color=colour, edgecolors="white",
                              linewidths=0.6, zorder=5)
@@ -400,109 +369,83 @@ def animate(ap, flights, requests, result, gate, real_windows, uses, t0, minutes
         panels.append({
             "gate": side_gate, "lines": lines, "dots": dots,
             "rings": ax.scatter([], [], s=150, facecolors="none", edgecolors=INK, linewidths=1.0, zorder=4),
-            "waits": ax.scatter([], [], s=190, facecolors="none", edgecolors=IN_USE, linewidths=1.8, zorder=4),
-            "final": ax.scatter([], [], s=70, marker=">", color=IN_USE, edgecolors="white", linewidths=0.6,
-                                zorder=6),
-            "flags": [ax.text(0.015, 0.985 - 0.04 * k, "", transform=ax.transAxes, fontsize=10,
-                              weight="bold", va="top",
-                              bbox=dict(boxstyle="round,pad=0.3", fc=SURFACE, ec=GRID))
-                      for k in range(len(strips))],
-            "queued": ax.scatter([], [], s=190, facecolors="none", edgecolors=QUEUE, linewidths=1.8, zorder=4),
-            "queue_labels": [ax.annotate("", (0, 0), xytext=(-14, 0), textcoords="offset points", ha="right",
-                                         va="center", fontsize=9, weight="bold", color=INK, zorder=7,
-                                         bbox=dict(boxstyle="round,pad=0.15", fc="white", ec=QUEUE, lw=1),
-                                         visible=False) for _ in range(MAX_QUEUE_LABELS)],
-            "status": ax.text(0.01, -0.05, "", transform=ax.transAxes, fontsize=10, color=INK),
-            "cumulative": 0.0,
+            "queued": ax.scatter([], [], s=170, facecolors="none", edgecolors=QUEUE, linewidths=1.8, zorder=4),
+            "status": ax.text(0.02, 0.02, "", transform=ax.transAxes, fontsize=11, color=INK,
+                              bbox=dict(boxstyle="round,pad=0.3", fc=SURFACE, ec=GRID)),
         })
 
-    clock = fig.text(0.5, 0.965, "", ha="center", fontsize=14, weight="bold", color=INK)
-    fig.text(0.5, 0.905, "● departure   ■ arrival   ▶ arrival on final   red runway = in use   "
-             "red ring = waiting for a runway\n#n = takeoff order   amber ring = waiting behind another "
-             "departure   dark ring = other stop",
-             ha="center", fontsize=10, color=INK_2)
+    # Average delay over the whole recording, with a cursor at the clock.
+    ax_d = fig.add_subplot(grid[1, :])
+    ax_d.set_facecolor(SURFACE)
+    ax_d.axvspan(start_s / 60, (start_s + minutes * 60) / 60, color=GRID, alpha=0.6, lw=0, zorder=0)
+    ax_d.plot(times / 60, real_avg, color=REAL, lw=2.2, zorder=3)
+    ax_d.plot(times / 60, plan_avg, color=MAPF, lw=2.2, zorder=3)
+    for series, colour, name in ((real_avg, REAL, "Real"), (plan_avg, MAPF, "Hold Short")):
+        ax_d.annotate(f"{name} {series[-1]:.1f} min", (times[-1] / 60, series[-1]), xytext=(6, 0),
+                      textcoords="offset points", va="center", fontsize=10, weight="bold", color=colour)
+    cursor = ax_d.axvline(start_s / 60, color=INK, lw=1.2, zorder=4)
+    marks = [ax_d.scatter([], [], s=40, color=c, edgecolors="white", zorder=5) for c in (REAL, MAPF)]
+    ax_d.set_title("Average delay per aircraft (engines running), minutes", fontsize=12, weight="bold",
+                   color=INK, loc="left")
+    ax_d.set_xlabel("minutes into the recording", color=INK_2)
+    ax_d.set_xlim(0, times[-1] / 60 * 1.18)
+    ax_d.set_ylim(0, np.nanmax(np.concatenate([real_avg, plan_avg])) * 1.15)
+    ax_d.grid(color=GRID, lw=0.8)
+    for side in ("top", "right"):
+        ax_d.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax_d.spines[side].set_color(MUTED)
+    ax_d.tick_params(colors=INK_2)
+
+    clock = fig.text(0.5, 0.955, "", ha="center", fontsize=15, weight="bold", color=INK)
+    fig.text(0.5, 0.925, "● departure   ■ arrival   ring = stopped   amber ring = waiting behind another "
+             "for takeoff   red runway = in use", ha="center", fontsize=10, color=INK_2)
 
     def offsets(pts):
         return pts or np.empty((0, 2))
 
-    def takeoff_queues(positions, t):
-        """{pair: [(aid, lon, lat)]} of departures near their line-up point, in takeoff order."""
+    def queued_behind(positions, t):
+        """Departures near their line-up point with another, earlier slot ahead of them."""
         queues = {}
-        for aid, kind, lon, lat, _, _ in positions:
-            if aid not in lineup:
-                continue
-            pair, slot, (gx, gy) = lineup[aid]
-            if slot <= t:
-                continue
-            x, y = _to_xy(ap, lat, lon)
-            if math.hypot(x - gx, y - gy) <= QUEUE_M:
-                queues.setdefault(pair, []).append((slot, aid, lon, lat))
-        return {pair: [(aid, lon, lat) for _, aid, lon, lat in sorted(q)] for pair, q in queues.items()}
+        for aid, _, lon, lat, _ in positions:
+            if aid in lineup and lineup[aid][1] > t:
+                pair, slot, (gx, gy) = lineup[aid]
+                x, y = _to_xy(ap, lat, lon)
+                if math.hypot(x - gx, y - gy) <= QUEUE_M:
+                    queues.setdefault(pair, []).append((slot, aid))
+        return {aid for q in queues.values() for _, aid in sorted(q)[1:]}
 
     def draw(panel, positions, t):
-        step = t / DT
-        queues = takeoff_queues(positions, t)
-        behind = {aid for q in queues.values() for aid, _, _ in q[1:]}
+        behind = queued_behind(positions, t)
         for kind, artist in panel["dots"].items():
-            artist.set_offsets(offsets([(lon, lat) for _, k, lon, lat, _, _ in positions if k == kind]))
-        panel["rings"].set_offsets(offsets([(lon, lat) for aid, _, lon, lat, stop, wait in positions
-                                            if stop and not wait and aid not in behind]))
-        panel["waits"].set_offsets(offsets([(lon, lat) for aid, _, lon, lat, _, wait in positions
-                                            if wait and aid not in behind]))
-        panel["queued"].set_offsets(offsets([(lon, lat) for aid, _, lon, lat, _, _ in positions if aid in behind]))
-        panel["final"].set_offsets(offsets([(lon, lat) for lat, lon in on_final(uses, runways, t)]))
-        labels = iter(panel["queue_labels"])
-        for q in queues.values():
-            for n, (_, lon, lat) in enumerate(q, 1):
-                label = next(labels, None)
-                if label:
-                    label.xy = (lon, lat)
-                    label.set_text(f"#{n}")
-                    label.set_visible(True)
-        for label in labels:
-            label.set_visible(False)
-        for flag, (pair, line) in zip(panel["flags"], panel["lines"].items()):
-            use = panel["gate"].in_use(pair, step)
-            line.set_color(IN_USE if use else RUNWAY)
-            queued = len(queues.get(pair, []))
-            tail = f" · {queued} in takeoff queue" if queued else ""
-            if use:
-                label, kind = use
-                flag.set_text(f"{pair}  IN USE · {kind} {label}{tail}")
-                flag.set_color(IN_USE)
-            else:
-                flag.set_text(f"{pair}  CLEAR{tail}")
-                flag.set_color(CLEAR)
-        panel["cumulative"] += len(positions) * stride
-        waiting = sum(1 for p in positions if p[5])
-        panel["status"].set_text(f"taxiing {len(positions):>2} · queued behind {len(behind):>2} · "
-                                 f"runway waits {waiting:>2} · engine-min {panel['cumulative'] / 60:,.0f}")
+            artist.set_offsets(offsets([(lon, lat) for _, k, lon, lat, _ in positions if k == kind]))
+        panel["rings"].set_offsets(offsets([(lon, lat) for aid, _, lon, lat, stop in positions
+                                            if stop and aid not in behind]))
+        panel["queued"].set_offsets(offsets([(lon, lat) for aid, _, lon, lat, _ in positions if aid in behind]))
+        for pair, line in panel["lines"].items():
+            line.set_color(IN_USE if panel["gate"].in_use(pair, t / DT) else RUNWAY)
+        panel["status"].set_text(f"taxiing {len(positions):>2}   queued for takeoff {len(behind):>2}")
 
     def frame(t):
         real = []
         for aid, (tt, lat, lon, speed, kind) in real_tracks.items():
             if tt[0] <= t <= tt[-1]:
                 i = min(np.searchsorted(tt, t), len(tt) - 1)
-                x, y = _to_xy(ap, np.interp(t, tt, lat), np.interp(t, tt, lon))
-                stopped = speed[i] <= STOPPED_SPEED
-                # Stopped beside a runway that is in use: holding short for it.
-                wait = stopped and any(
-                    real_gate.in_use(p, t / DT) and rw.on_runway_xy(x, y, margin=HOLD_SHORT_M)
-                    for p, rw in real_gate.runways.items())
-                real.append((aid, kind, np.interp(t, tt, lon), np.interp(t, tt, lat), stopped, wait))
+                real.append((aid, kind, np.interp(t, tt, lon), np.interp(t, tt, lat), speed[i] <= STOPPED_SPEED))
         plan = []
         for aid, path in result.paths.items():
-            r = by_id[aid]
-            done = path[-1][1] if r.hold_until is not None else path[-1][1] - r.goal_hold
-            if t / DT > done:
+            if t / DT > plan_done(aid):
                 continue
             pos = position_at(ap, path, t / DT, parks=False)
             if pos:
-                plan.append((aid, kinds[aid], pos[1], pos[0], pos[2],
-                             runway_wait(gate, path, t / DT) is not None))
+                plan.append((aid, kinds[aid], pos[1], pos[0], pos[2]))
         draw(panels[0], real, t)
         draw(panels[1], plan, t)
-        clock.set_text(f"KEWR  t = {int(t) // 3600}:{int(t) % 3600 // 60:02d}:{int(t) % 60:02d}")
+        k = min(int(t // 60), len(times) - 1)
+        cursor.set_xdata([t / 60, t / 60])
+        for mark, series in zip(marks, (real_avg, plan_avg)):
+            mark.set_offsets(offsets([(t / 60, series[k])] if not np.isnan(series[k]) else []))
+        clock.set_text(f"KEWR  {int(t) // 3600}:{int(t) % 3600 // 60:02d}:{int(t) % 60:02d}")
         return []
 
     frames = list(np.arange(start_s, start_s + minutes * 60, stride))
@@ -616,99 +559,80 @@ def stats_figure(rows, n_conflicts, n_incursions, out):
     return out
 
 
-def pitch_figure(rows, summary, out):
-    """One 16:9 slide: headline tiles, per-aircraft delay, departure engine time."""
-    fig = plt.figure(figsize=(16, 9), facecolor=SURFACE)
-    grid = fig.add_gridspec(2, 2, height_ratios=[0.3, 1], width_ratios=[1.5, 1], hspace=0.3, wspace=0.18,
-                            left=0.05, right=0.97, top=0.93, bottom=0.11)
-    arr, dep = summary["arrivals"], summary["departures"]
-    fig.text(0.05, 0.955, f"KEWR, {summary['aircraft']} real aircraft, same runway schedule, "
-             f"same taxi speed ({summary['speed_kt']:.1f} kt)", fontsize=14, weight="bold", color=INK)
-
-    head = fig.add_subplot(grid[0, :])
-    head.axis("off")
-    tiles = [
-        (f"{arr['real_delay_min']:.0f} → {arr['mapf_delay_min']:.0f} min", "arrival delay, total", MAPF),
-        (f"{dep['real_engine_min']:,.0f} → {dep['mapf_engine_min']:,.0f} min",
-         "departure engine-running taxi time", MAPF),
-        (f"{summary['fuel_kg'] / 1000:.1f} t", f"fuel saved (≈{summary['co2_t']:.1f} t CO₂) in 2 h", MAPF),
-        (f"{summary['conflicts']} / {summary['incursions']}", "conflicts / runway incursions", INK),
-    ]
-    for k, (value, label, colour) in enumerate(tiles):
-        x = k / len(tiles)
-        head.text(x, 0.55, value, fontsize=24, weight="bold", color=INK, transform=head.transAxes)
-        head.plot([x, x + 0.03], [0.35, 0.35], color=colour, lw=3, transform=head.transAxes,
-                  solid_capstyle="round")
-        head.text(x, 0.05, label, fontsize=11, color=INK_2, transform=head.transAxes)
-
-    def style(ax, title, xlabel, ylabel):
-        ax.set_facecolor(SURFACE)
-        ax.set_title(title, fontsize=13, weight="bold", color=INK, loc="left")
-        ax.set_xlabel(xlabel, color=INK_2)
-        ax.set_ylabel(ylabel, color=INK_2)
-        ax.grid(color=GRID, lw=0.8)
-        ax.set_axisbelow(True)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color(MUTED)
-        ax.tick_params(colors=INK_2)
-
-    # Delay per aircraft over the unimpeded taxi, sorted by the real delay.
-    ax = fig.add_subplot(grid[1, 0])
-    ordered = sorted(rows, key=lambda r: r["real_delay_s"])
-    x = np.arange(len(ordered))
-    ax.vlines(x, [r["mapf_engine_delay_s"] / 60 for r in ordered], [r["real_delay_s"] / 60 for r in ordered],
-              color=GRID, lw=1.2, zorder=2)
-    ax.scatter(x, [r["real_delay_s"] / 60 for r in ordered], s=16, color=REAL, label="Real", zorder=3)
-    ax.scatter(x, [r["mapf_engine_delay_s"] / 60 for r in ordered], s=16, color=MAPF,
-               label="Hold Short (engines on)", zorder=3)
-    ax.axhline(0, color=MUTED, lw=1)
-    ax.set_xticks([])
-    ax.legend(frameon=False, loc="upper left")
-    style(ax, "Delay per aircraft, beyond an unimpeded taxi", "aircraft, sorted by real delay", "minutes")
-
-    # Where departures spend the wait for their slot.
-    ax = fig.add_subplot(grid[1, 1])
-    real_h = dep["real_engine_min"] / 60
-    plan_h = dep["mapf_engine_min"] / 60
-    held_h = dep["gate_hold_min"] / 60
-    ax.bar([0], [real_h], 0.55, color=REAL, zorder=3)
-    ax.bar([1], [plan_h], 0.55, color=MAPF, zorder=3, label="engines on, taxiing or queued")
-    ax.bar([1], [held_h], 0.55, bottom=[plan_h], color="none", edgecolor=MAPF, hatch="//", zorder=3,
-           label="held at gate, engines off")
-    ax.text(0, real_h + 0.3, f"{real_h:.1f} h", ha="center", fontsize=11, color=INK)
-    ax.text(1, plan_h / 2, f"{plan_h:.1f} h", ha="center", fontsize=11, color=SURFACE, weight="bold")
-    ax.text(1, plan_h + held_h + 0.3, f"+{held_h:.1f} h at gate", ha="center", fontsize=11, color=INK)
-    ax.set_xticks([0, 1], ["Real", "Hold Short"])
-    ax.set_ylim(0, (max(real_h, plan_h + held_h)) * 1.15)
-    ax.legend(frameon=False, loc="upper right", fontsize=9)
-    style(ax, f"{dep['n']} departures, same takeoff slots", "", "aircraft-hours")
-
-    fig.text(0.05, 0.03,
-             "Real = ADS-B (Amelia42, KEWR). Hold Short = prioritized space-time A* on the same start/end points and "
-             "release times, planned in order of appearance, real landings and takeoffs closing the runways, "
-             f"{FOLLOW_M} m following distance. Not modelled: slowing for turns, pushback, {DT} s time steps. "
-             f"Fuel at {TAXI_FUEL_KG_PER_MIN} kg/min per aircraft (narrowbody idle).",
-             fontsize=9, color=INK_2, wrap=True)
-    fig.savefig(out, dpi=120, facecolor=SURFACE)
-    plt.close(fig)
-    return out
-
-
 # ---------------------------------------------------------------- main
 
+def position_node(path, t):
+    """Node the path is at, or last left, at step t."""
+    return next((n for n, step in reversed(path) if step <= t), path[0][0])
+
+
+def takeoff_gaps(times):
+    """Seconds between consecutive takeoffs on each runway, all runways together."""
+    gaps = []
+    for pair_times in times.values():
+        t = sorted(pair_times)
+        gaps += [b - a for a, b in zip(t, t[1:])]
+    return gaps
+
+
+def report(rows, real_takeoffs, plan_takeoffs, safety, settings):
+    """Real vs MAPF tables for the terminal."""
+    def avg(subset, key):
+        return statistics.mean(r[key] for r in subset) / 60 if subset else float("nan")
+
+    table = []
+    for label, kind in (("Arrivals", "arrival"), ("Departures", "departure"), ("All aircraft", None)):
+        sub = [r for r in rows if kind is None or r["kind"] == kind]
+        group = f"{label} ({len(sub)})"
+        table += [
+            (group, "avg taxi time (min)", avg(sub, "real_time_s"), avg(sub, "mapf_time_s")),
+            (group, "avg delay (min)", avg(sub, "real_delay_s"), avg(sub, "mapf_delay_s")),
+            (group, "avg time stopped (min)", avg(sub, "real_holding_s"), avg(sub, "mapf_holding_s")),
+        ]
+        if kind is None:
+            table.append((group, "total taxi time (h)", sum(r["real_time_s"] for r in sub) / 3600,
+                          sum(r["mapf_time_s"] for r in sub) / 3600))
+    real_gaps, plan_gaps = takeoff_gaps(real_takeoffs), takeoff_gaps(plan_takeoffs)
+    last = (max(t for v in real_takeoffs.values() for t in v) / 60,
+            max(t for v in plan_takeoffs.values() for t in v) / 60)
+    table += [
+        ("Runway", "median gap between takeoffs (s)", statistics.median(real_gaps), statistics.median(plan_gaps)),
+        ("Runway", "shortest gap between takeoffs (s)", min(real_gaps), min(plan_gaps)),
+        ("Runway", "last takeoff (min into recording)", *last),
+    ]
+    df = pd.DataFrame(table, columns=["", "metric", "Real", "Hold Short"]).set_index(["", "metric"])
+    df["change"] = ((df["Hold Short"] - df["Real"]) / df["Real"] * 100).map(lambda v: f"{v:+.0f}%")
+
+    pd.set_option("display.width", 120)
+    print(f"\n=== KEWR, real ADS-B vs Hold Short MAPF: {len(rows)} aircraft, same spawn times ===")
+    print(", ".join(f"{k} {v}" for k, v in settings.items()))
+    print(df.to_string(float_format=lambda v: f"{v:,.1f}"))
+
+    per = pd.DataFrame(rows)
+    per["saved_min"] = (per["real_time_s"] - per["mapf_time_s"]) / 60
+    cols = ["id", "kind", "start", "goal", "real_min", "mapf_min", "saved_min"]
+    per["real_min"], per["mapf_min"] = per["real_time_s"] / 60, per["mapf_time_s"] / 60
+    print("\nBiggest time savings:")
+    print(per.nlargest(5, "saved_min")[cols].to_string(index=False, float_format=lambda v: f"{v:.1f}"))
+    print("\nBiggest losses:")
+    print(per.nsmallest(5, "saved_min")[cols].to_string(index=False, float_format=lambda v: f"{v:.1f}"))
+    print("\nSafety: " + ", ".join(f"{k} {v}" for k, v in safety.items()))
+
+
 def main(argv=None):
+    global TAKEOFF_SPACING_S, TAKEOFF_SPACING
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--minutes", type=int, default=15, help="how much of the recording to animate")
-    parser.add_argument("--start-minute", type=float, default=None,
-                        help="where the GIF starts; default is the busiest window")
-    parser.add_argument("--stride", type=int, default=5, help="seconds per GIF frame")
     parser.add_argument("--speed-kt", type=float, default=None,
                         help="planner taxi speed; default is the real average moving speed")
-    parser.add_argument("--no-gate-hold", action="store_true", help="release departures when they really appeared")
-    parser.add_argument("--no-gif", action="store_true")
+    parser.add_argument("--takeoff-spacing", type=int, default=TAKEOFF_SPACING_S,
+                        help="minimum seconds between takeoffs from the same runway")
+    parser.add_argument("--gif", action="store_true", help="also render the side-by-side GIF")
+    parser.add_argument("--minutes", type=int, default=15, help="GIF length")
+    parser.add_argument("--start-minute", type=float, default=None, help="GIF start; default the busiest window")
+    parser.add_argument("--stride", type=int, default=5, help="seconds per GIF frame")
     args = parser.parse_args(argv)
+    TAKEOFF_SPACING_S = args.takeoff_spacing
+    TAKEOFF_SPACING = math.ceil(TAKEOFF_SPACING_S / DT)
 
     df = read_traffic()
     t0 = int(df["UnixTime"].min())
@@ -725,101 +649,74 @@ def main(argv=None):
     requests = make_requests(flights, t0)
 
     started = time.perf_counter()
-    base = plan(requests)
-    plan_ms = (time.perf_counter() - started) * 1000
-    base_late = sum(1 for r in requests if r.hold_until is not None and r.id in base.paths
-                    and reached_goal(r, base.paths[r.id]) > r.hold_until)
-    print(f"planner: {ap.taxi_speed / KT:.1f} kt, follow gap {follow_gap * DT} s, node clearance {node_buffer * DT} s")
-    print(f"base plan: {len(base.paths)}/{len(requests)} in {plan_ms:.0f} ms, {len(base.failures)} failed, "
-          f"{base_late} departures late for their slot")
+    result = plan(requests)
+    plan_s = time.perf_counter() - started
 
-    if args.no_gate_hold:
-        result, held_requests, held = base, requests, {}
-    else:
-        started = time.perf_counter()
-        result, held_requests, held = gate_hold(plan, requests, base)
-        print(f"gate hold: {len(result.paths)}/{len(requests)} in {(time.perf_counter() - started) * 1000:.0f} ms, "
-              f"{len(result.failures)} failed")
-    # gate.windows now holds the real schedule plus every runway claim of `result`.
+    # gate.windows now holds the real landings plus every runway use the plan claimed.
     conflicts = check_paths(result.paths, park_at_goal=False, node_buffer=node_buffer, follow_gap=follow_gap)
     incursions = runway_conflicts(gate, result.paths, departs_from)
-    claims = sum(len(w) for w in gate.windows.values()) - sum(len(w) for w in real_windows.values())
-    print(f"{len(conflicts)} taxiway conflicts, {len({(a, p) for a, p, _ in incursions})} runway incursions, "
-          f"{claims} runway-in-use claims by planned aircraft")
-    for aid, reason in result.failures.items():
-        print(f"  FAILED {aid}: {reason}")
-
     by_id = {r.id: r for r in requests}
-    held_by_id = {r.id: r for r in held_requests}
+    plan_takeoffs, real_takeoffs = {}, {}
+    for f in flights:
+        if f["kind"] == "departure" and f["id"] in result.paths:
+            plan_takeoffs.setdefault(f["pair"], []).append(result.paths[f["id"]][-1][1] * DT)
+            real_takeoffs.setdefault(f["pair"], []).append(f["slot_s"])
+    # Takeoffs at least TAKEOFF_SPACING_S apart, and no roll during a real landing.
+    separation = sum(1 for g in takeoff_gaps(plan_takeoffs) if g < TAKEOFF_SPACING_S) + sum(
+        1 for pair, times in plan_takeoffs.items() for t in times
+        for w0, w1, _, _ in real_windows[pair] if w0 * DT < t + TAKEOFF_ROLL_S and t < w1 * DT)
+
     rows = []
     for f in flights:
         aid = f["id"]
-        if aid not in result.paths or aid not in base.paths:
+        if aid not in result.paths:
             continue
-        r = by_id[aid]
         real = real_metrics(f["rows"])
-        plan_m = planned_metrics(ap, r, base.paths[aid])
-        engine = planned_metrics(ap, held_by_id[aid], result.paths[aid])
+        planned = planned_metrics(ap, by_id[aid], result.paths[aid])
         unimpeded = free_flow_steps(ap, f["start"], f["goal"]) * DT
         rows.append({
             "id": aid, "kind": f["kind"],
             "start": ap.label(f["start"]), "goal": ap.label(f["goal"]),
             **{f"real_{k.replace('avg_speed_kt', 'speed_kt')}": round(v, 1) for k, v in real.items()},
-            **{f"mapf_{k.replace('avg_speed_kt', 'speed_kt')}": round(v, 1) for k, v in plan_m.items()},
+            **{f"mapf_{k.replace('avg_speed_kt', 'speed_kt')}": round(v, 1) for k, v in planned.items()},
             "unimpeded_s": unimpeded,
             "real_delay_s": round(real["time_s"] - unimpeded, 1),
-            "mapf_delay_s": round(plan_m["time_s"] - unimpeded, 1),
-            "gate_hold_s": held.get(aid, 0) * DT,
-            "mapf_engine_s": round(engine["time_s"], 1),
-            "late_s": max(0, reached_goal(r, result.paths[aid]) - r.hold_until) * DT
-            if r.hold_until is not None else 0,
+            "mapf_delay_s": round(planned["time_s"] - unimpeded, 1),
+            "mapf_engine_delay_s": round(planned["time_s"] - unimpeded, 1),
         })
 
-    pitch_dir = OUT_DIR / "pitch"
-    pitch_dir.mkdir(parents=True, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
     with open(OUT_DIR / "real_vs_mapf.csv", "w", newline="", encoding="utf-8") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
 
-    def minutes(subset, key):
-        return round(sum(r[key] for r in subset) / 60, 1)
+    report(rows, real_takeoffs, plan_takeoffs,
+           safety={"taxiway conflicts": len(conflicts),
+                   "runway incursions": len({(a, p) for a, p, _ in incursions}),
+                   "runway separation violations": separation,
+                   "not routed": len(result.failures)},
+           settings={"taxi speed": f"{ap.taxi_speed / KT:.1f} kt",
+                     "following distance": f"{FOLLOW_M} m",
+                     "takeoff spacing": f"{TAKEOFF_SPACING_S} s",
+                     "planned in": f"{plan_s:.0f} s"})
+    for aid, reason in result.failures.items():
+        print(f"  NOT ROUTED {aid}: {reason}")
+    kinds = {f["id"]: f["kind"] for f in flights}
+    for aid, pair, t in sorted({(a, p, t) for a, p, t in incursions}, key=lambda x: x[2])[:20]:
+        holders = [(label, kind) for w0, w1, label, kind in gate.windows[pair] if w0 <= t < w1 and label != aid]
+        node = position_node(result.paths[aid], t)
+        print(f"  INCURSION {kinds[aid]} {aid} on {pair} at {t * DT // 60}:{t * DT % 60:02d} "
+              f"(at {ap.label(node)}), runway held by {holders}")
 
-    arr = [r for r in rows if r["kind"] == "arrival"]
-    dep = [r for r in rows if r["kind"] == "departure"]
-    engine_saved = minutes(dep, "real_time_s") - minutes(dep, "mapf_engine_s")
-    summary = {
-        "aircraft": len(rows),
-        "speed_kt": round(ap.taxi_speed / KT, 1),
-        "conflicts": len(conflicts),
-        "incursions": len({(a, p) for a, p, _ in incursions}),
-        "runway_claims": claims,
-        "failed": len(result.failures),
-        "arrivals": {
-            "n": len(arr),
-            "real_taxi_min": minutes(arr, "real_time_s"), "mapf_taxi_min": minutes(arr, "mapf_time_s"),
-            "real_holding_min": minutes(arr, "real_holding_s"), "mapf_holding_min": minutes(arr, "mapf_holding_s"),
-        },
-        "departures": {
-            "n": len(dep),
-            "real_engine_min": minutes(dep, "real_time_s"), "mapf_engine_min": minutes(dep, "mapf_engine_s"),
-            "gate_hold_min": minutes(dep, "gate_hold_s"),
-            "late_for_slot": sum(1 for r in dep if r["late_s"] > 0),
-        },
-        "fuel_saved_kg": round(max(0.0, engine_saved) * TAXI_FUEL_KG_PER_MIN),
-    }
-    (pitch_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    print(json.dumps(summary, indent=2))
-
-    print(f"\nSaved {stats_figure(rows, len(conflicts), summary['incursions'], OUT_DIR / 'real_vs_mapf_stats.png')}")
-    print(f"Saved {OUT_DIR / 'real_vs_mapf.csv'}, {pitch_dir / 'summary.json'}")
-    if not args.no_gif:
+    if args.gif:
+        pitch_dir = OUT_DIR / "pitch"
+        pitch_dir.mkdir(exist_ok=True)
         start_s = (args.start_minute * 60 if args.start_minute is not None
                    else busiest_window(flights, args.minutes, t0))
-        started = time.perf_counter()
-        out = animate(ap, flights, held_requests, result, gate, real_windows, uses, t0, args.minutes,
+        out = animate(ap, flights, requests, result, gate, real_windows, rows, t0, args.minutes,
                       args.stride, pitch_dir / "compare.gif", start_s=start_s)
-        print(f"Saved {out} (minute {start_s / 60:.0f}, {time.perf_counter() - started:.0f} s to render)")
+        print(f"Saved {out}")
 
 
 if __name__ == "__main__":

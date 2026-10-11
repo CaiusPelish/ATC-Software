@@ -34,7 +34,7 @@ class PlanResult:
 
 
 def plan(airport, aid, start, goal, t_start, reservations, *, edge_allowed=None, max_t=None,
-         goal_hold=None, hold_until=None):
+         goal_hold=None, hold_until=None, finish_allowed=None):
     """Earliest-arrival conflict-free path for aid from start (at t_start) to goal.
 
     goal_hold=None means the aircraft parks at goal for good (an arrival at its
@@ -46,6 +46,10 @@ def plan(airport, aid, start, goal, t_start, reservations, *, edge_allowed=None,
     edge_allowed(u, v, t_enter) -> bool lets callers gate edges by time, e.g.
     runway crossings that are only open during a crossing window. It is also
     asked about waits, as edge_allowed(u, u, t), so nobody waits on a runway.
+
+    finish_allowed(t) -> bool, if given, must also hold for the aircraft to
+    start its goal hold at step t, e.g. a takeoff that needs its runway clear;
+    until then it waits at the goal.
     """
     for node in (start, goal):
         if node not in airport.graph:
@@ -99,7 +103,7 @@ def plan(airport, aid, start, goal, t_start, reservations, *, edge_allowed=None,
         node, t = state
 
         hold = _hold_steps(t, goal_hold, hold_until)
-        if node == goal and t >= earliest and _can_finish(
+        if node == goal and t >= earliest and (finish_allowed is None or finish_allowed(t)) and _can_finish(
                 reservations, edge_allowed, aid, goal, t, hold, goal_free_after):
             path = _rebuild(parent, state)
             path.extend((goal, t + k) for k in range(1, (hold or 0) + 1))
