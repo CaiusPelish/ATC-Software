@@ -66,8 +66,8 @@ ARRIVED_LINGER_S = 8
 REPAIR_RETRIES = 2
 # Faster than taxiing: on a landing or takeoff roll, where the aircraft can't be stopped.
 ROLL_SPEED_MS = 1.5 * TAXI_SPEED
-# Fire trucks and other ground vehicles, about 25 kt.
-VEHICLE_SPEED_MS = 13.0
+# Fire trucks and other ground vehicles, about 40 kt.
+VEHICLE_SPEED_MS = 20.0
 
 
 class NoRoute(ValueError):
