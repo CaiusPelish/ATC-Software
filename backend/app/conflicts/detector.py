@@ -1,7 +1,9 @@
 # backend/app/conflicts/detector.py
 
-"""Conflicts in the live simulation, from where everything is right now.
+"""Conflicts in the live simulation, from where everything is right now, and
+warnings, from where everything is going.
 
+Conflicts:
 - Runway incursion (critical, location = runway pair like "4L/22R"): an
   aircraft or vehicle on a runway while someone else's landing or takeoff
   window on it is open. aircraft_ids is [the intruder, the aircraft using the
@@ -11,11 +13,18 @@
   its plan (holding, waiting for a route, or a vehicle). Two aircraft both on
   planned routes are conflict-free by construction, and the simplified graph
   has nodes 10 m apart, so their distance alone would raise false alarms.
+
+Warnings:
+- Predicted loss of separation (eta = seconds until it happens): a vehicle
+  whose track, followed for the next LOOKAHEAD_S, comes within WARNING_M of an
+  aircraft or another vehicle following its own. This is what a controller
+  sees right after routing a truck across where a plane is going. Once they
+  are actually that close it is a conflict instead.
 """
 
 import math
 
-from ..models import Conflict
+from ..models import CollisionWarning, Conflict
 from ..routing.airport import DT
 from ..routing.graph import ground_geometry, ground_nodes
 from ..routing.osm_taxiways import edge_points, haversine_m
@@ -23,6 +32,9 @@ from ..routing.runways import ZONE_M, _to_xy
 
 WARNING_M = 40
 CRITICAL_M = 20
+LOOKAHEAD_S = 30
+# Fine enough that a truck and a rolling-out arrival can't pass through each other between samples.
+LOOKAHEAD_STEP_S = 0.5
 
 
 def _latlon(track, t):
@@ -46,7 +58,57 @@ def _latlon(track, t):
     return tuple(pts[-1])
 
 
+def _max_speed(track, t0, t1):
+    """Fastest the track moves anywhere in [t0, t1], in m/s."""
+    return max((
+        (d1 - d0) / (b - a)
+        for (a, d0), (b, d1) in zip(track.points, track.points[1:])
+        if b > t0 and a < t1 and b > a
+    ), default=0.0)
+
+
+def _predicted(sim, t, movers, xy, now_close):
+    vehicles = {v.id for v in sim.state.vehicles}
+    if not vehicles:
+        return []
+    tracks = dict(movers)
+    horizon = t + LOOKAHEAD_S
+    times = [t + LOOKAHEAD_STEP_S * k for k in range(1, int(LOOKAHEAD_S / LOOKAHEAD_STEP_S) + 1)]
+    vmax = {mid: _max_speed(tr, t, horizon) for mid, tr in movers}
+    future = {}
+
+    def path(mid):
+        if mid not in future:
+            tr = tracks[mid]
+            # Standing still for the whole lookahead: no need to walk the geometry.
+            future[mid] = ([xy[mid]] * len(times) if vmax[mid] == 0
+                           else [_to_xy(sim.ap, *_latlon(tr, s)) for s in times])
+        return future[mid]
+
+    warnings = []
+    ids = [mid for mid, _ in movers]
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            if a not in vehicles and b not in vehicles or frozenset((a, b)) in now_close:
+                continue
+            # Too far apart to close the gap within the lookahead even head-on.
+            if math.dist(xy[a], xy[b]) - (vmax[a] + vmax[b]) * LOOKAHEAD_S >= WARNING_M:
+                continue
+            for s, pa, pb in zip(times, path(a), path(b)):
+                if math.dist(pa, pb) < WARNING_M:
+                    # The vehicle first, like the intruder in a runway incursion.
+                    vehicle, other = (a, b) if a in vehicles else (b, a)
+                    tr = tracks[other]
+                    warnings.append(CollisionWarning(
+                        aircraft_ids=[vehicle, other],
+                        location=tr.route[tr.index(tr.dist(s))],
+                        eta=round(s - t, 1)))
+                    break
+    return warnings
+
+
 def detect_conflicts(sim):
+    """(conflicts happening now, warnings of ones coming up)."""
     t = sim.now
     step = t / DT
     movers = [(a.id, sim.tracks[a.id]) for a in sim.state.aircraft if a.status != "arrived"]
@@ -69,13 +131,15 @@ def detect_conflicts(sim):
 
     planned = {a.id for a in sim.state.aircraft if a.status == "taxiing"}
     ids = [mid for mid, _ in movers]
+    now_close = set()
     for i, a in enumerate(ids):
         for b in ids[i + 1:]:
             if a in planned and b in planned:
                 continue
             gap = math.dist(xy[a], xy[b])
             if gap < WARNING_M:
+                now_close.add(frozenset((a, b)))
                 position = next(x.position for x in sim.state.aircraft + sim.state.vehicles if x.id == a)
                 conflicts.append(Conflict(aircraft_ids=[a, b], location=position,
                                           severity="critical" if gap < CRITICAL_M else "warning"))
-    return conflicts
+    return conflicts, _predicted(sim, t, movers, xy, now_close)

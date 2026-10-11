@@ -39,12 +39,20 @@ class Conflict(BaseModel):
     severity: Literal["warning", "critical"]
 
 
+class CollisionWarning(BaseModel):
+    """A conflict that hasn't happened yet: where things are headed brings them together."""
+    aircraft_ids: list[str]
+    location: str
+    eta: float  # seconds until it happens
+
+
 class SimulationState(BaseModel):
     time: float = 0.0
     running: bool = False
     aircraft: list[Aircraft] = Field(default_factory=list)
     vehicles: list[Vehicle] = Field(default_factory=list)
     conflicts: list[Conflict] = Field(default_factory=list)
+    warnings: list[CollisionWarning] = Field(default_factory=list)
     scheduled_spawns: list["ScheduledSpawn"] = Field(
         default_factory=list
     )

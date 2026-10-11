@@ -166,6 +166,29 @@ class LiveSimTest(unittest.TestCase):
         self.assertEqual(after.route[0], node)
         self.assertAlmostEqual(after.dist(sim.now), d - before.cum[before.index(d)], places=6)
 
+    def test_truck_routed_into_aircraft_path_is_predicted(self):
+        """Driving a truck onto where a taxiing aircraft is going warns before they get close."""
+        sim = LiveSim(auto_spawn=False, seed=0)
+        a = sim.add_waiting("AC1", "TST1", "A320", "large", sim.ramps[0], "rwy_22R")
+        sim.route(a.id, a.destination)
+        run(sim, 1)
+        tr = sim.tracks[a.id]
+        # A node the aircraft reaches 15 s or more from now, and a start for the truck two hops off its route.
+        target = next(n for n, d in zip(tr.route, tr.cum) if tr.time_at(d) >= sim.now + 15)
+        on_route = set(tr.route)
+        start = next(m for n in airport_graph[target] if n not in on_route
+                     for m in airport_graph[n] if m not in on_route)
+        sim.add_vehicle("TRUCK01", [start])
+        run(sim, 1)
+        self.assertFalse([c for c in sim.state.conflicts + sim.state.warnings if "TRUCK01" in c.aircraft_ids])
+
+        sim.route_vehicle("TRUCK01", target)
+        sim.tick(TICK)
+        predicted = [w for w in sim.state.warnings if w.aircraft_ids == ["TRUCK01", a.id]]
+        self.assertEqual(len(predicted), 1)
+        self.assertGreater(predicted[0].eta, 0)
+        self.assertFalse([c for c in sim.state.conflicts if "TRUCK01" in c.aircraft_ids])
+
     def test_bad_vehicle_requests(self):
         sim = LiveSim(auto_spawn=False, seed=0)
         sim.add_vehicle("TRUCK01", [sim.ramps[0]])
