@@ -40,9 +40,9 @@ export default function Sim() {
 
   return (
     <main className="relative h-svh overflow-hidden bg-background">
-      <GroundChart className="absolute inset-0" state={state} />
+      <GroundChart className="absolute inset-0" state={state} live={source.mode === "live"} />
 
-      <header className="pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-center gap-2 p-4 sm:gap-3">
+      <header className="pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-center gap-2 p-4 pr-16 sm:gap-3">
         <Button asChild variant="outline" size="icon" className="pointer-events-auto bg-scrim backdrop-blur">
           <Link to="/" aria-label="Back to start">
             <ArrowLeft />
