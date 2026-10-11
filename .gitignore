@@ -8,9 +8,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# Environment variables
+# Environment variables (never commit secrets; .env.example templates stay tracked)
 .env
 .env.*
+!.env.example
 
 # Editor and OS
 .vscode/
