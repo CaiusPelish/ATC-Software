@@ -133,7 +133,7 @@ class LiveSimTest(unittest.TestCase):
         truck = sim.vehicle("TRUCK01")
         start = truck.position
         far_side = "rwy_22L"
-        sim.route_vehicle("TRUCK01", far_side)
+        sim.route_vehicle("TRUCK01", far_side, avoid_traffic=False)
         self.assertEqual(truck.route[0], start)
         self.assertEqual(truck.route[-1], far_side)
         for u, v in zip(truck.route, truck.route[1:]):
@@ -191,12 +191,67 @@ class LiveSimTest(unittest.TestCase):
         run(sim, 1)
         self.assertFalse([c for c in sim.state.conflicts + sim.state.warnings if "TRUCK01" in c.aircraft_ids])
 
-        sim.route_vehicle("TRUCK01", target)
+        sim.route_vehicle("TRUCK01", target, avoid_traffic=False)
         sim.tick(TICK)
         predicted = [w for w in sim.state.warnings if w.aircraft_ids == ["TRUCK01", a.id]]
         self.assertEqual(len(predicted), 1)
         self.assertGreater(predicted[0].eta, 0)
         self.assertFalse([c for c in sim.state.conflicts if "TRUCK01" in c.aircraft_ids])
+
+    def test_truck_wont_park_where_an_aircraft_is_going(self):
+        """Routed around traffic, a truck can't be sent to a spot a taxiing aircraft will pass."""
+        sim = LiveSim(auto_spawn=False, seed=0)
+        a = sim.add_waiting("AC1", "TST1", "A320", "large", sim.ramps[0], "rwy_22R")
+        sim.route(a.id, a.destination)
+        run(sim, 1)
+        tr = sim.tracks[a.id]
+        # Close enough to get there before the aircraft does.
+        target = next(n for n, d in zip(tr.route, tr.cum) if tr.time_at(d) >= sim.now + 15)
+        on_route = set(tr.route)
+        start = next(m for n in airport_graph[target] if n not in on_route
+                     for m in airport_graph[n] if m not in on_route)
+        sim.add_vehicle("TRUCK01", [start])
+        with self.assertRaisesRegex(ValueError, "TST1"):
+            sim.route_vehicle("TRUCK01", target)
+        self.assertEqual(sim.vehicle("TRUCK01").status, "waiting")
+
+    def test_trucks_detour_around_traffic(self):
+        """A truck sent around the airport in busy traffic never gets close to an aircraft; driven the
+        shortest way it does."""
+        def drive(avoid_traffic):
+            rng = random.Random(4)
+            nodes = list(airport_graph)
+            sim = LiveSim(seed=4)
+            run(sim, 120)
+            sim.add_vehicle("T", [rng.choice(nodes)])
+            close, routes = [], 0
+
+            def every(sim, k):
+                nonlocal routes
+                if sim.vehicle("T").status == "waiting":
+                    try:
+                        sim.route_vehicle("T", rng.choice(nodes), avoid_traffic=avoid_traffic)
+                        routes += 1
+                    except ValueError:
+                        pass
+                close.extend(c for c in sim.state.conflicts if "T" in c.aircraft_ids)
+
+            run(sim, 600, every)
+            return close, routes
+
+        close, routes = drive(True)
+        self.assertGreater(routes, 5)
+        self.assertEqual(close, [])
+        close, _ = drive(False)
+        self.assertTrue(close)
+
+    def test_no_landing_with_a_truck_on_the_runway(self):
+        sim = LiveSim(auto_spawn=False, seed=0)
+        sim.add_vehicle("TRUCK01", ["rwy_22L"])
+        self.assertIsNone(sim.spawn_arrival())
+        sim.route_vehicle("TRUCK01", sim.ramps[0])
+        run(sim, sim.tracks["TRUCK01"].end_t - sim.now + 1)
+        self.assertIsNotNone(sim.spawn_arrival())
 
     def test_bad_vehicle_requests(self):
         sim = LiveSim(auto_spawn=False, seed=0)

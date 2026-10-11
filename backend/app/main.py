@@ -250,7 +250,7 @@ async def spawn_vehicle(request: SpawnVehicleRequest):
 
 @app.post("/api/vehicles/{vehicle_id}/route")
 async def route_vehicle(vehicle_id: str, request: RouteRequest):
-    """Shortest ground path from where the vehicle is; it crosses runways without asking."""
+    """Fastest ground path from where the vehicle is that keeps clear of aircraft and runways in use."""
     return _act_vehicle(world.sim.route_vehicle, vehicle_id, request.destination)
 
 

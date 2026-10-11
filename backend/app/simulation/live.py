@@ -24,16 +24,17 @@ import heapq
 import math
 import random
 from bisect import bisect_right
-from collections import deque
+from collections import Counter, deque
 
-from ..conflicts.detector import detect_conflicts
+from ..conflicts.detector import CRITICAL_M, WARNING_M, _latlon, _max_speed, detect_conflicts
 from ..models import Aircraft, SimulationState, Vehicle
 from ..routing.airport import DT, TAXI_SPEED, get_airport
 from ..routing.astar import astar
-from ..routing.graph import airport_graph, runway_edges
+from ..routing.graph import airport_graph, ground_geometry, ground_nodes, runway_edges
 from ..routing.mapf import AircraftRequest, plan_one
+from ..routing.osm_taxiways import edge_points
 from ..routing.reservations import ReservationTable
-from ..routing.runways import RunwayGate, exits, load_runways
+from ..routing.runways import ZONE_M, RunwayGate, _to_xy, exits, load_runways
 from .arrivals import (
     APPROACH_KT,
     EXIT_SPEED_MS,
@@ -52,8 +53,10 @@ SPAWN_EVERY_S = 40
 FIRST_SPAWN_S = 2
 # No new spawns while this many aircraft are on the ground or about to land.
 MAX_ACTIVE = 8
-# An arrival is scheduled this long before touchdown, so its runway window is known in advance.
-LANDING_LEAD_S = 45
+# A spawned arrival is over the threshold this long after it is scheduled.
+FINAL_LEAD_S = 10
+# An arrival that couldn't have the runway is tried again this soon, rather than slipping.
+ARRIVAL_RETRY_S = 5
 # A landing that can't have the runway is pushed back this much (a go-around), up to MAX_SLIPS times.
 LANDING_SLIP_S = 30
 MAX_SLIPS = 6
@@ -68,6 +71,13 @@ REPAIR_RETRIES = 2
 ROLL_SPEED_MS = 1.5 * TAXI_SPEED
 # Fire trucks and other ground vehicles, about 40 kt.
 VEHICLE_SPEED_MS = 20.0
+# A truck routed around traffic stays this far from every aircraft's expected track:
+# the collision-warning distance, plus room for checking it only every few meters.
+VEHICLE_CLEARANCE_M = WARNING_M + 10
+# Spacing of the points along a truck's candidate route checked against traffic.
+VEHICLE_CHECK_M = 10
+# Aircraft positions are looked up at this resolution, in seconds.
+VEHICLE_CHECK_S = 0.5
 
 
 class NoRoute(ValueError):
@@ -142,6 +152,30 @@ def _runway_adjacency():
     return adj
 
 
+@functools.cache
+def _node_xy(n):
+    return _to_xy(get_airport(), ground_nodes[n].lat, ground_nodes[n].lon)
+
+
+@functools.cache
+def _edge_samples(u, v):
+    """[(meters along u -> v, (x, y))] every VEHICLE_CHECK_M or so along the drawn edge, ends included."""
+    ap = get_airport()
+    pts = [_to_xy(ap, *p) for p in edge_points(ground_nodes, ground_geometry, u, v)]
+    lengths = [math.dist(a, b) for a, b in zip(pts, pts[1:])]
+    drawn = sum(lengths)
+    # Meters as Track counts them, which can differ a little from the drawn length.
+    scale = airport_graph[u][v] / drawn if drawn > 0 else 0.0
+    samples, along = [(0.0, pts[0])], 0.0
+    for (a, b), seg in zip(zip(pts, pts[1:]), lengths):
+        k = max(1, math.ceil(seg / VEHICLE_CHECK_M))
+        for j in range(1, k + 1):
+            f = j / k
+            samples.append(((along + seg * f) * scale, (a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f)))
+        along += seg
+    return samples
+
+
 def runway_route(a, b):
     """Ground node ids from a to b along runway centreline edges only."""
     adj = _runway_adjacency()
@@ -183,6 +217,47 @@ def ground_link(u, v):
                 return tuple(path[::-1])
             queue.append(m)
     raise ValueError(f"Planner edge {u}->{v} has no counterpart in KEWR_ground")
+
+
+@functools.cache
+def _planner_edges_xy():
+    """[(u, v, [(x, y), ...])] for every planner edge, along its drawn geometry."""
+    ap = get_airport()
+    edges = []
+    for u in ap.graph:
+        for v in ap.graph[u]:
+            if u < v:
+                link = ground_link(u, v)
+                pts = [p for a, b in zip(link, link[1:])
+                       for p in edge_points(ground_nodes, ground_geometry, a, b)]
+                edges.append((u, v, [_to_xy(ap, *p) for p in pts]))
+    return edges
+
+
+def _seg_dist(p, a, b):
+    """Distance from point p to segment ab, all (x, y) in meters."""
+    (px, py), (ax, ay), (bx, by) = p, a, b
+    dx, dy = bx - ax, by - ay
+    span = dx * dx + dy * dy
+    f = 0.0 if span == 0 else max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / span))
+    return math.hypot(px - ax - f * dx, py - ay - f * dy)
+
+
+def standing_zone(ap, xy, radius=CRITICAL_M):
+    """Planner nodes to keep everyone off so nobody passes within radius of xy.
+
+    Every planner node that close, plus, for every edge whose drawn geometry
+    comes that close, its endpoint nearer xy: anyone on the edge has to go
+    through both ends, so blocking one closes it.
+    """
+    zone = set()
+    for u, v, pts in _planner_edges_xy():
+        if min(_seg_dist(xy, a, b) for a, b in zip(pts, pts[1:])) >= radius:
+            continue
+        du, dv = math.dist(xy, pts[0]), math.dist(xy, pts[-1])
+        zone.add(u if du <= dv else v)
+        zone.update(n for n, dn in ((u, du), (v, dv)) if dn < radius)
+    return zone
 
 
 def expand(nodes):
@@ -230,6 +305,8 @@ class LiveSim:
         self.swaps = 0           # deadlocks broken by planning one aircraft through another's spot
         self.unrouted = set()    # spawned for auto-routing but no route yet; retried every step
         self.next_resume_step = 0
+        self.avoiding = set()        # vehicles routed around traffic, rerouted when it cuts across
+        self.vehicle_retry_at = {}   # vehicle id -> seconds before which it isn't rerouted again
 
         self.ramps = self.ap.hold_shorts("movement")
         # Departures line up at the exit nearest the threshold.
@@ -264,8 +341,12 @@ class LiveSim:
         if self.auto_spawn and t >= self.next_spawn_s:
             self.next_spawn_s = t + SPAWN_EVERY_S
             if self._active_count() < MAX_ACTIVE:
-                (self.spawn_arrival if self.next_is_arrival else self.spawn_departure)()
-                self.next_is_arrival = not self.next_is_arrival
+                if self.next_is_arrival and self.spawn_arrival() is None:
+                    self.next_spawn_s = t + ARRIVAL_RETRY_S
+                else:
+                    if not self.next_is_arrival:
+                        self.spawn_departure()
+                    self.next_is_arrival = not self.next_is_arrival
 
         while self.pending and self.pending[0][0] <= t:
             self.state.aircraft.append(heapq.heappop(self.pending)[2])
@@ -281,6 +362,8 @@ class LiveSim:
         self._drop_finished(t)
 
         self.state.conflicts, self.state.warnings = detect_conflicts(self)
+        if self.avoiding:
+            self._reroute_vehicles()
         return self.state
 
     def _update_aircraft(self, a, t):
@@ -375,9 +458,11 @@ class LiveSim:
     def spawn_arrival(self, *, touchdown_s=None, ramp=None, force=False):
         """Schedule a landing on ARRIVAL_RUNWAY; the aircraft appears at the threshold.
 
-        The runway is closed to everyone else from LOCK_NM out until the
-        arrival has vacated. A landing that would meet traffic on the runway
-        slips back (force=True skips that check, for scenarios).
+        Without touchdown_s it is over the threshold FINAL_LEAD_S from now, or
+        not scheduled at all (None) if the runway can't be had then. The runway
+        is closed to everyone else from LOCK_NM out until the arrival has
+        vacated. A landing at a given touchdown_s that would meet traffic on the
+        runway slips back (force=True skips that check, for scenarios).
         """
         rw = self.runways[ARRIVAL_RUNWAY]
         aid, callsign, ac_type, weight = self._new_flight()
@@ -388,11 +473,13 @@ class LiveSim:
         roll_s = 2 * (exit_along - TOUCHDOWN_M) / (v0 + EXIT_SPEED_MS) + 6
         lock_s = LOCK_NM * NM_M / v0
 
-        td = self.now + LANDING_LEAD_S if touchdown_s is None else touchdown_s
-        for _ in range(MAX_SLIPS):
+        td = self.now + FINAL_LEAD_S + TOUCHDOWN_M / v0 if touchdown_s is None else touchdown_s
+        for _ in range(MAX_SLIPS if touchdown_s is not None else 1):
             w0, w1 = math.floor((td - lock_s) / DT), math.ceil((td + roll_s) / DT)
-            if force or not (self.gate.busy(rw.pair, w0, w1)
-                             or self.runway_busy(rw.pair, w0, w1)
+            # The part of the lock window already behind us can't be in anyone's way.
+            w = max(w0, self.step)
+            if force or not (self.gate.busy(rw.pair, w, w1)
+                             or self.runway_busy(rw.pair, w, w1)
                              or self.res.node_conflict(exit_node, w1)):
                 break
             td += LANDING_SLIP_S
@@ -438,8 +525,11 @@ class LiveSim:
         return v
 
     # ---- vehicles ---------------------------------------------------------
-    # Trucks are not planned: they drive the shortest way, runways included,
-    # and reserve nothing. Running into traffic is what conflicts report.
+    # Trucks reserve nothing, so the aircraft planner doesn't see them. Instead
+    # a truck detours around where the aircraft are expected to be: its route
+    # keeps VEHICLE_CLEARANCE_M from every aircraft's track and off runways in
+    # use (avoid_traffic=False drives the shortest way regardless). Aircraft
+    # plans made later can still cut across it; tick() then reroutes the truck.
 
     def vehicle(self, vid):
         for v in self.state.vehicles:
@@ -447,8 +537,8 @@ class LiveSim:
                 return v
         raise KeyError(vid)
 
-    def route_vehicle(self, vid, destination, speed=VEHICLE_SPEED_MS):
-        """Drive vid by the shortest ground path from where it is to destination."""
+    def route_vehicle(self, vid, destination, speed=VEHICLE_SPEED_MS, avoid_traffic=True):
+        """Drive vid from where it is to destination, around traffic unless avoid_traffic=False."""
         v = self.vehicle(vid)
         if destination not in airport_graph:
             raise ValueError(f"{destination} is not a ground node")
@@ -458,10 +548,17 @@ class LiveSim:
         # Between two nodes: keep going to the next one, then turn there.
         mid_edge = i < len(tr.route) - 1 and d > tr.cum[i] + 1e-6
         head = tr.route[i:i + 2] if mid_edge else tr.route[i:i + 1]
-        found = astar(airport_graph, head[-1], destination)
-        if found is None:
-            raise ValueError(f"No ground path from {head[-1]} to {destination}")
-        new = Track(head + found["route"][1:], [(t, d - tr.cum[i])])
+        if avoid_traffic:
+            ahead = tr.cum[i + 1] - d if mid_edge else 0.0
+            route = self._vehicle_route(vid, head[-1], t + ahead / speed, destination, speed)
+            self.avoiding.add(vid)
+        else:
+            found = astar(airport_graph, head[-1], destination)
+            if found is None:
+                raise ValueError(f"No ground path from {head[-1]} to {destination}")
+            route = found["route"]
+            self.avoiding.discard(vid)
+        new = Track(head + route[1:], [(t, d - tr.cum[i])])
         if new.length > new.points[0][1]:
             new.points.append((t + (new.length - new.points[0][1]) / speed, new.length))
         self.tracks[vid] = new
@@ -469,6 +566,117 @@ class LiveSim:
         v.status = "taxiing" if len(new.points) > 1 else "waiting"
         self._update_vehicle(v, t)
         return v
+
+    def _vehicle_route(self, vid, start, t_start, goal, speed):
+        """Fastest ground route from start (reached at t_start) to goal that keeps clear of traffic.
+
+        A* over arrival times at a constant speed, with no waiting, so a truck
+        that would meet an aircraft takes another way. Every few meters along
+        each edge the truck must be VEHICLE_CLEARANCE_M from where every other
+        mover's track has it then, and off any runway with a landing or
+        takeoff window open; once at goal it parks there, so goal must stay
+        clear for as long as the tracks go. Raises NoRoute naming who is in
+        the way most.
+        """
+        now = self.now
+        movers = {a.id: self.tracks[a.id] for a in self.state.aircraft if a.status != "arrived"}
+        movers.update((a.id, self.tracks[a.id]) for _, _, a in self.pending)
+        movers.update((o.id, self.tracks[o.id]) for o in self.state.vehicles if o.id != vid)
+        xy_now = {m: _to_xy(self.ap, *_latlon(tr, now)) for m, tr in movers.items()}
+        vmax = {m: _max_speed(tr, now, math.inf) for m, tr in movers.items()}
+        memo = {}
+
+        def at(m, s):
+            k = (m, round(s / VEHICLE_CHECK_S))
+            if k not in memo:
+                memo[k] = _to_xy(self.ap, *_latlon(movers[m], k[1] * VEHICLE_CHECK_S))
+            return memo[k]
+
+        def runway_users(p, t0, t1):
+            """Who has a window open on a runway p is on, any time in [t0, t1) seconds."""
+            for pair, rw in self.gate.runways.items():
+                if rw.on_runway_xy(*p, margin=ZONE_M / 2):
+                    for w0, w1, label, _ in self.gate.windows[pair]:
+                        if w0 * DT < t1 and t0 < w1 * DT:
+                            return label
+            return None
+
+        def in_the_way(p, s):
+            for m in movers:
+                # Too far off to reach p by s even heading straight for it.
+                if math.dist(p, xy_now[m]) - vmax[m] * (s - now) >= VEHICLE_CLEARANCE_M:
+                    continue
+                if math.dist(p, at(m, s)) < VEHICLE_CLEARANCE_M:
+                    return m
+            return runway_users(p, s, s + 1e-6)
+
+        def parked_in_the_way(p, s):
+            for m, tr in movers.items():
+                end = max(tr.end_t, s)
+                if math.dist(p, xy_now[m]) - vmax[m] * (end - now) >= VEHICLE_CLEARANCE_M:
+                    continue
+                k = s
+                while True:
+                    if math.dist(p, at(m, k)) < VEHICLE_CLEARANCE_M:
+                        return m
+                    if k >= end:
+                        break
+                    k = min(k + VEHICLE_CHECK_S, end)
+            return runway_users(p, s, math.inf)
+
+        goal_xy = _node_xy(goal)
+
+        def h(n):
+            # 0.99 absorbs the difference between the flat projection and haversine lengths.
+            return 0.99 * math.dist(_node_xy(n), goal_xy) / speed
+
+        best, prev, blockers = {start: t_start}, {}, Counter()
+        queue = [(t_start + h(start), t_start, start)]
+        while queue:
+            _, t, n = heapq.heappop(queue)
+            if t > best[n]:
+                continue
+            if n == goal:
+                who = parked_in_the_way(_node_xy(goal), t)
+                if who is None:
+                    route = [goal]
+                    while route[-1] != start:
+                        route.append(prev[route[-1]])
+                    return route[::-1]
+                blockers[who] += 1
+                continue
+            for m, length in airport_graph[n].items():
+                t1 = t + length / speed
+                if t1 >= best.get(m, math.inf):
+                    continue
+                who = next((w for along, p in _edge_samples(n, m)
+                            if (w := in_the_way(p, t + along / speed))), None)
+                if who is not None:
+                    blockers[who] += 1
+                    continue
+                best[m], prev[m] = t1, n
+                heapq.heappush(queue, (t1 + h(m), t1, m))
+
+        message = f"No route for {vid} to {goal} clear of traffic"
+        if blockers:
+            who = blockers.most_common(1)[0][0]
+            name = next((a.callsign for a in self.state.aircraft if a.id == who),
+                        next((a.callsign for _, _, a in self.pending if a.id == who), who))
+            message += f"; mostly in the way: {name}"
+        raise NoRoute(message + ".", blockers)
+
+    def _reroute_vehicles(self):
+        """Reroute trucks driving around traffic that a newer aircraft plan now cuts across."""
+        warned = {w.aircraft_ids[0] for w in self.state.warnings}
+        warned |= {i for c in self.state.conflicts for i in c.aircraft_ids}
+        for v in self.state.vehicles:
+            if (v.id in self.avoiding and v.id in warned and v.status == "taxiing"
+                    and self.now >= self.vehicle_retry_at.get(v.id, 0)):
+                self.vehicle_retry_at[v.id] = self.now + DT
+                try:
+                    self.route_vehicle(v.id, v.route[-1])
+                except NoRoute:
+                    pass  # keeps going; the warning stays up for the controller
 
     def hold_vehicle(self, vid, hold, speed=VEHICLE_SPEED_MS):
         """Stop vid where it is (hold=True), or carry on along its route (hold=False)."""
@@ -490,20 +698,23 @@ class LiveSim:
     # ---- reservations ----------------------------------------------------
 
     @staticmethod
-    def _behind(aid):
-        """Id of the extra reservation for the node behind an aircraft held mid-edge."""
-        return f"{aid}@behind"
+    def _around(aid, node):
+        """Id of an extra reservation keeping others off node while aid is stopped near it."""
+        return f"{aid}@{node}"
 
-    def _reserve(self, aid, path, park_at_goal, behind=None):
+    def _standing(self, aid):
+        """{key: path} of aid's extra reservations around where it is stopped."""
+        return {k: p for k, p in self.res.paths().items() if k.startswith(aid + "@")}
+
+    def _reserve(self, aid, path, park_at_goal, around=()):
         self._unreserve(aid)
         self.res.add_path(aid, path, park_at_goal=park_at_goal)
-        if behind:
-            self.res.add_path(self._behind(aid), [behind], park_at_goal=True)
+        for node, t in around:
+            self.res.add_path(self._around(aid, node), [(node, t)], park_at_goal=True)
 
     def _unreserve(self, aid):
-        for key in (aid, self._behind(aid)):
-            if key in self.res:
-                self.res.remove_path(key)
+        for key in [aid] * (aid in self.res) + list(self._standing(aid)):
+            self.res.remove_path(key)
 
     def _walled_off(self, aid, start, goal):
         """Ids of who blocks every way from start to goal by parking (holding, waiting), or None.
@@ -542,7 +753,9 @@ class LiveSim:
     # ---- runway use ------------------------------------------------------
 
     def runway_busy(self, pair, t0, t1, ignore=None):
-        """True if any reserved aircraft but `ignore` is on the runway during steps [t0, t1)."""
+        """True if any reserved aircraft but `ignore`, or any vehicle, is on the runway during steps [t0, t1)."""
+        if self._vehicle_on_runway(pair, t0 * DT, t1 * DT):
+            return True
         on = self.gate.on[pair]
         for aid, path in self.res.paths().items():
             if aid == ignore:
@@ -553,6 +766,25 @@ class LiveSim:
             node, t_last = path[-1]
             if node in on and t_last < t1 and not self.leaves.get(aid):
                 return True  # parked on it, or waiting there for the controller
+        return False
+
+    def _vehicle_on_runway(self, pair, t0, t1):
+        """True if a vehicle's track has it on the runway any time in [t0, t1) seconds."""
+        rw = self.gate.runways[pair]
+        t0 = max(t0, self.now)
+        if t1 <= t0:
+            return False
+        for v in self.state.vehicles:
+            tr = self.tracks[v.id]
+            # Standing still from t0 on: one look is enough.
+            end = min(t1, tr.end_t) if _max_speed(tr, t0, t1) > 0 else t0
+            s = t0
+            while True:
+                if rw.on_runway_xy(*_to_xy(self.ap, *_latlon(tr, s)), margin=ZONE_M / 2):
+                    return True
+                if s >= end:
+                    break
+                s = min(s + VEHICLE_CHECK_S, end)
         return False
 
     def _clear_takeoff(self, aid):
@@ -623,9 +855,11 @@ class LiveSim:
         ahead = next((tr.route[k] for k in range(i, len(tr.route))
                       if tr.route[k] in planner and tr.cum[k] >= d - 1e-6), prev)
         prev = prev or ahead
-        # Stopped between two nodes: nobody may use either until it moves again.
+        # Stopped between two nodes: nobody may use either until it moves again, nor
+        # anything that would pass too close to where it stands.
+        around = ({prev} | standing_zone(self.ap, _to_xy(self.ap, *_latlon(tr, t)))) - {ahead}
         self._reserve(aid, [(ahead, self.step)], park_at_goal=True,
-                      behind=(prev, self.step) if prev != ahead else None)
+                      around=[(n, self.step) for n in sorted(around)])
         self._clear_takeoff(aid)
         self.leaves[aid] = False
         self.tracks[aid] = Track(tr.route, [(t, d)])
@@ -635,8 +869,8 @@ class LiveSim:
         """Other aircraft whose reserved path, from now on, runs into aid's reservation."""
         mine = ReservationTable(self.res.node_buffer, self.res.follow_gap)
         mine.add_path(aid, self.res.path(aid), park_at_goal=not self.leaves.get(aid))
-        if self._behind(aid) in self.res:
-            mine.add_path(self._behind(aid), self.res.path(self._behind(aid)))
+        for key, path in self._standing(aid).items():
+            mine.add_path(key, path)
         hits = []
         for other, path in self.res.paths().items():
             if other == aid or "@" in other:
@@ -756,16 +990,16 @@ class LiveSim:
             a.status, a.route, a.destination = status, route, destination
 
     def _plan_and_commit(self, a, destination, tr, from_d=0.0, retries=6):
-        # A held aircraft's reservation behind it is its own; it mustn't block its replan.
-        behind = self._behind(a.id)
-        kept = self.res.path(behind) if behind in self.res else None
-        if kept:
-            self.res.remove_path(behind)
+        # A held aircraft's reservations around it are its own; they mustn't block its replan.
+        kept = self._standing(a.id)
+        for key in kept:
+            self.res.remove_path(key)
         try:
             return self._plan_and_commit_inner(a, destination, tr, from_d, retries)
         except ValueError:
-            if kept and behind not in self.res:
-                self.res.add_path(behind, kept, park_at_goal=True)
+            for key, path in kept.items():
+                if key not in self.res:
+                    self.res.add_path(key, path, park_at_goal=True)
             raise
 
     def _plan_and_commit_inner(self, a, destination, tr, from_d, retries):
