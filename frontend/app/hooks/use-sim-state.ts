@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { hasNode } from "~/lib/chart";
 import { advanceDemoState, createDemoState } from "~/lib/demo-traffic";
+import { loadScenario } from "~/lib/sim-api";
 import type { SimulationState } from "~/lib/sim-state";
 
 export type SimSource =
@@ -69,7 +70,10 @@ export function useSimState() {
       timer = setTimeout(tick, POLL_MS);
     }
 
-    tick();
+    // A challenge left running (tab closed before Exit) never spawns traffic; start fresh.
+    loadScenario("default").catch(() => null).finally(() => {
+      if (!cancelled) tick();
+    });
     return () => {
       cancelled = true;
       clearTimeout(timer);
