@@ -46,3 +46,8 @@ export function assignRoute(aircraftId: string) {
 export function holdVehicle(id: string, hold: boolean) {
   return post<GroundVehicle>(`/api/vehicles/${encodeURIComponent(id)}/hold`, { hold });
 }
+
+/** Put a ground vehicle (e.g. a fire truck) on a node; it waits there until routed. */
+export function spawnVehicle(id: string, position: string) {
+  return post<GroundVehicle>("/api/vehicles", { id, position });
+}

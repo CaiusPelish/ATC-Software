@@ -1,5 +1,6 @@
 import { Link } from "react-router";
-import { ArrowLeft, Eye, Flame } from "lucide-react";
+import { ArrowLeft, Eye, Flame, Truck } from "lucide-react";
+import { toast } from "sonner";
 
 import type { Route } from "./+types/sim";
 import { ConflictAlerts } from "~/components/conflict-alerts";
@@ -13,6 +14,7 @@ import { Card, CardContent } from "~/components/ui/card";
 import { useConflictAlerts } from "~/hooks/use-conflict-alerts";
 import { useCrashChallenge } from "~/hooks/use-crash-challenge";
 import { useSimState, type SimSource } from "~/hooks/use-sim-state";
+import { spawnVehicle } from "~/lib/sim-api";
 import { cn } from "~/lib/utils";
 
 export function meta({}: Route.MetaArgs) {
@@ -38,6 +40,9 @@ const sourceLabel: Record<string, { text: string; dot: string }> = {
 
 const sourceKey = (s: SimSource) => (s.mode === "demo" ? s.reason : s.mode);
 
+// Beside runway 22L at taxiway M's crossing, so a truck is one drag away from the runway.
+const TRUCK_SPAWN_NODE = "46592214";
+
 export default function Sim() {
   const { state, source } = useSimState();
   const challenge = useCrashChallenge(state);
@@ -47,7 +52,7 @@ export default function Sim() {
 
   return (
     <main className="relative h-svh overflow-hidden bg-background">
-      <GroundChart className="absolute inset-0" state={state} live={live} />
+      <GroundChart className="absolute inset-0" state={state} live={live} warnings={conflictAlerts.predicted} />
       <ConflictAlerts alerts={conflictAlerts} live={live} />
 
       <header className="pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-center gap-2 p-4 pr-16 sm:gap-3">
@@ -72,7 +77,27 @@ export default function Sim() {
         </Badge>
         <Button
           variant="outline"
-          className="pointer-events-auto ml-auto gap-2 border-destructive/50 bg-scrim px-3 backdrop-blur"
+          className="pointer-events-auto ml-auto gap-2 bg-scrim px-3 backdrop-blur"
+          disabled={!live || challenge.phase !== "idle"}
+          title={live ? "Add a fire truck beside runway 22L" : "Needs the live backend"}
+          onClick={async () => {
+            const taken = new Set(state?.vehicles.map((v) => v.id));
+            let n = 1;
+            while (taken.has(`FIRE${n}`)) n++;
+            try {
+              await spawnVehicle(`FIRE${n}`, TRUCK_SPAWN_NODE);
+              toast.success(`FIRE${n} added beside runway 22L. Drag it to send it somewhere.`);
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : "Couldn't add a truck.");
+            }
+          }}
+        >
+          <Truck />
+          <span className="hidden sm:inline">Add fire truck</span>
+        </Button>
+        <Button
+          variant="outline"
+          className="pointer-events-auto gap-2 border-destructive/50 bg-scrim px-3 backdrop-blur"
           disabled={!live || challenge.phase !== "idle"}
           title={live ? "Try to cause a runway incursion" : "Needs the live backend"}
           onClick={challenge.open}

@@ -4,7 +4,7 @@ import { toast } from "sonner";
 
 import { Button } from "~/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
-import { RouteLayer, type DestinationHover } from "~/components/route-layer";
+import { RouteLayer, WarningLayer, type DestinationHover, type PredictedMeeting } from "~/components/route-layer";
 import { VehicleLayer } from "~/components/vehicle-layer";
 import {
   chart,
@@ -30,6 +30,7 @@ const taxiwaysById = new Map(chart.taxiways.map((t) => [t.id, t]));
 const nodesById = new Map(chart.nodes.map((n) => [n.id, n]));
 
 type View = { x: number; y: number; w: number; h: number };
+const NO_WARNINGS: PredictedMeeting[] = [];
 const FULL_VIEW: View = { x: 0, y: 0, w: width, h: height };
 
 /** What gets drawn at each zoom level, so the zoomed-out chart stays readable. */
@@ -261,9 +262,12 @@ export function GroundChart({
   className,
   state,
   live = false,
+  warnings = NO_WARNINGS,
 }: {
   className?: string;
   state: SimulationState | null;
+  /** Predicted meeting points to mark on the map. */
+  warnings?: PredictedMeeting[];
   /** Live backend traffic. Routing only works then; demo traffic can't take clearances. */
   live?: boolean;
 }) {
@@ -511,6 +515,7 @@ export function GroundChart({
           selectedTaxiway={selectedTaxiway}
           tier={tier}
         />
+        <WarningLayer warnings={warnings} />
         <RouteLayer remaining={remaining} pickHover={pickHover} pending={pending} ghost={ghost} />
         <VehicleLayer vehicles={vehicles} activeId={activeVehicle} />
       </svg>

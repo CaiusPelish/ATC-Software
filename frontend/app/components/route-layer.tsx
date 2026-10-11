@@ -1,6 +1,6 @@
 import { memo } from "react";
 
-import type { Point } from "~/lib/chart";
+import { chart, type Point } from "~/lib/chart";
 import { cn } from "~/lib/utils";
 
 export type DestinationHover = { id: string; x: number; y: number; label: string };
@@ -77,6 +77,35 @@ export const RouteLayer = memo(function RouteLayer({
           </text>
         </g>
       )}
+    </g>
+  );
+});
+
+export type PredictedMeeting = { key: string; location: string; eta?: number };
+
+/** Where the backend predicts a vehicle will meet traffic: a pulsing amber ring + countdown. */
+export const WarningLayer = memo(function WarningLayer({ warnings }: { warnings: PredictedMeeting[] }) {
+  return (
+    <g className="pointer-events-none">
+      {warnings.map((w) => {
+        const p = chart.positions[w.location];
+        if (!p) return null;
+        return (
+          <g key={w.key} style={pinned(p[0], p[1])} data-predicted={w.location}>
+            <circle r={26} className="fill-taxiway/15 stroke-taxiway motion-safe:animate-pulse" strokeWidth={3} />
+            <circle r={6} className="fill-taxiway" />
+            {w.eta !== undefined && (
+              <text
+                x={34}
+                y={-18}
+                className="fill-taxiway font-mono text-[24px] font-bold [paint-order:stroke] stroke-background [stroke-linejoin:round] [stroke-width:7px]"
+              >
+                {`${Math.max(1, Math.round(w.eta))} s`}
+              </text>
+            )}
+          </g>
+        );
+      })}
     </g>
   );
 });

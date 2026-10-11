@@ -68,7 +68,13 @@ export function ConflictAlerts({ alerts: a, live }: { alerts: Alerts; live: bool
                 </div>
                 <CardTitle className="text-sm font-medium">{alert.text}</CardTitle>
                 <CardDescription className="text-xs">
-                  {alert.active ? "Happening now" : "Cleared"}
+                  {alert.kind === "predicted"
+                    ? alert.active
+                      ? `Predicted · in ${Math.max(1, Math.round(alert.eta ?? 0))} s unless someone holds`
+                      : "No longer predicted"
+                    : alert.active
+                      ? "Happening now"
+                      : "Cleared"}
                   {live && a.voiceError ? ` · Voice: ${a.voiceError}` : ""}
                 </CardDescription>
               </CardHeader>

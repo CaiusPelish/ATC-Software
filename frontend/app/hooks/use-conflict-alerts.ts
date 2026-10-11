@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { describeConflict, type ConflictAlert } from "~/lib/alert-speech";
+import { describeConflict, describeWarning, type ConflictAlert } from "~/lib/alert-speech";
 import type { SimulationState } from "~/lib/sim-state";
 
 const LINGER_MS = 10_000; // an alert stays up this long after its conflict ends
@@ -10,8 +10,9 @@ const REANNOUNCE_MS = 30_000; // the same conflict isn't spoken again within thi
 export type ShownAlert = ConflictAlert & { firstAt: number; lastAt: number; active: boolean };
 
 /**
- * Conflicts from the backend become sticky on-screen alerts, a red flash while one is
- * happening, and (live traffic only) a spoken ElevenLabs announcement per new conflict.
+ * Conflicts (happening now) and predicted collisions (the backend's 30 s lookahead) become
+ * sticky on-screen alerts and, on live traffic, one spoken ElevenLabs announcement per pair.
+ * Only real conflicts flash the screen red; a prediction is the early heads-up.
  */
 export function useConflictAlerts(state: SimulationState | null, live: boolean) {
   const [alerts, setAlerts] = useState<ShownAlert[]>([]);
@@ -71,7 +72,13 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
   useEffect(() => {
     if (!state) return;
     const now = performance.now();
-    const current = state.conflicts.map((c) => describeConflict(c, state));
+    const real = state.conflicts.map((c) => describeConflict(c, state));
+    const realPairs = new Set(real.map((c) => c.pair));
+    // Once a predicted pair is actually close, its real conflict card takes over.
+    const predicted = (state.warnings ?? [])
+      .map((w) => describeWarning(w, state))
+      .filter((w) => !realPairs.has(w.pair));
+    const current = [...real, ...predicted];
     const currentKeys = new Set(current.map((c) => c.key));
 
     setAlerts((prev) => {
@@ -89,6 +96,7 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
         });
       }
       return [...byKey.values()]
+        .filter((a) => !(a.kind === "predicted" && realPairs.has(a.pair)))
         .map((a) => (currentKeys.has(a.key) ? a : { ...a, active: now - a.lastAt < FLASH_TAIL_MS }))
         .filter((a) => now - a.lastAt < LINGER_MS)
         .sort((a, b) => b.firstAt - a.firstAt)
@@ -99,10 +107,12 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
     for (const key of dismissed.current) if (!currentKeys.has(key)) dismissed.current.delete(key);
 
     if (live && !muted) {
+      // One announcement per pair: the heads-up and the real conflict that follows it
+      // aren't both spoken.
       for (const c of current) {
-        const last = announced.current.get(c.key);
+        const last = announced.current.get(c.pair);
         if (last === undefined || now - last > REANNOUNCE_MS) {
-          announced.current.set(c.key, now);
+          announced.current.set(c.pair, now);
           queue.current.push(c.spoken);
         }
       }
@@ -117,7 +127,9 @@ export function useConflictAlerts(state: SimulationState | null, live: boolean) 
 
   return {
     alerts,
-    flashing: alerts.some((a) => a.active),
+    flashing: alerts.some((a) => a.active && a.kind !== "predicted"),
+    /** Predicted meeting points still ahead, for the map. */
+    predicted: alerts.filter((a) => a.kind === "predicted" && a.active),
     muted,
     toggleMute: () => setMuted((m) => !m),
     voiceError,
