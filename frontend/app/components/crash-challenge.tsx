@@ -1,4 +1,5 @@
-import { CheckCircle2, Flame, LogOut, RotateCcw, Route as RouteIcon, TriangleAlert } from "lucide-react";
+import { useState } from "react";
+import { CheckCircle2, Flame, LogOut, RotateCcw, Route as RouteIcon, TriangleAlert, X } from "lucide-react";
 
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -26,6 +27,8 @@ export function CrashChallenge({
   onSolve: (ids: string[]) => Promise<{ atc_phrase: string } | null>;
 }) {
   const { phase, caught, busy, touchdownIn, closesIn, runwayClosed } = challenge;
+  // The caught banner can be closed once its solution path is sent; the challenge keeps running.
+  const [closed, setClosed] = useState<Challenge["caught"]>(null);
   if (phase === "idle") return null;
 
   if (phase === "intro") {
@@ -80,6 +83,11 @@ export function CrashChallenge({
             <span className={cn("size-2 rounded-full", runwayClosed ? "animate-pulse bg-destructive" : "bg-beacon")} />
             {runwayClosed ? "Runway closed · landing" : `Runway open · closes in ${clock(closesIn)}`}
           </Badge>
+          {phase === "caught" && closed === caught && (
+            <Button size="sm" variant="ghost" className="pointer-events-auto" onClick={() => void challenge.exit()} {...swallow}>
+              <LogOut /> Exit
+            </Button>
+          )}
         </CardContent>
         {(phase === "starting" || phase === "running") && (
           <p className="px-4 pt-2 text-xs text-muted-foreground">
@@ -89,15 +97,27 @@ export function CrashChallenge({
         )}
       </Card>
 
-      {phase === "caught" && caught && (
+      {phase === "caught" && caught && closed !== caught && (
         <Card
           className={cn(
-            "pointer-events-auto gap-0 bg-card py-4 ring-2 transition-colors duration-700",
+            "pointer-events-auto relative gap-0 bg-card py-4 ring-2 transition-colors duration-700",
             caught.solution ? "border-beacon ring-beacon/40" : "border-destructive ring-destructive/60",
           )}
           data-result="caught"
           {...swallow}
         >
+          {caught.solution && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute top-2 right-2 size-7"
+              aria-label="Close"
+              data-close
+              onClick={() => setClosed(caught)}
+            >
+              <X />
+            </Button>
+          )}
           <CardHeader className="gap-1.5 px-4">
             <p
               className={cn(
