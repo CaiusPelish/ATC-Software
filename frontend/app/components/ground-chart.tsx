@@ -1,10 +1,22 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Maximize, Minus, Plus, X } from "lucide-react";
+import { toast } from "sonner";
 
 import { Button } from "~/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
+import { RouteLayer, WarningLayer, type DestinationHover, type PredictedMeeting } from "~/components/route-layer";
 import { VehicleLayer } from "~/components/vehicle-layer";
-import { chart, describe, type HoverTarget, type Point } from "~/lib/chart";
+import {
+  chart,
+  describe,
+  destinationLabel,
+  nearestDestination,
+  routePoint,
+  routeRemaining,
+  type HoverTarget,
+  type Point,
+} from "~/lib/chart";
+import { sendRoute } from "~/lib/sim-api";
 import { vehiclesOf, type SimulationState, type VehicleInfo } from "~/lib/sim-state";
 import { cn } from "~/lib/utils";
 
@@ -18,6 +30,7 @@ const taxiwaysById = new Map(chart.taxiways.map((t) => [t.id, t]));
 const nodesById = new Map(chart.nodes.map((n) => [n.id, n]));
 
 type View = { x: number; y: number; w: number; h: number };
+const NO_WARNINGS: PredictedMeeting[] = [];
 const FULL_VIEW: View = { x: 0, y: 0, w: width, h: height };
 
 /** What gets drawn at each zoom level, so the zoomed-out chart stays readable. */
@@ -245,11 +258,30 @@ const Nodes = memo(function Nodes({
   );
 });
 
-export function GroundChart({ className, state }: { className?: string; state: SimulationState | null }) {
+export function GroundChart({
+  className,
+  state,
+  live = false,
+  warnings = NO_WARNINGS,
+}: {
+  className?: string;
+  state: SimulationState | null;
+  /** Predicted meeting points to mark on the map. */
+  warnings?: PredictedMeeting[];
+  /** Live backend traffic. Routing only works then; demo traffic can't take clearances. */
+  live?: boolean;
+}) {
   const [view, setView] = useState<View>(FULL_VIEW);
   const [hovered, setHovered] = useState<HoverTarget | null>(null);
   const [selected, setSelected] = useState<HoverTarget | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [pickHover, setPickHover] = useState<DestinationHover | null>(null);
+  const [pending, setPending] = useState(false);
+  // The route the backend just sent back, shown until the next poll carries it.
+  const [justRouted, setJustRouted] = useState<{ id: string; route: string[]; at: number } | null>(null);
+  // Dragging a truck: a dashed line from the truck to the cursor while choosing where it goes.
+  const [ghost, setGhost] = useState<[Point, Point] | null>(null);
+  const truckDrag = useRef<{ vehicle: VehicleInfo; startX: number; startY: number; moved: boolean } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -271,6 +303,37 @@ export function GroundChart({ className, state }: { className?: string; state: S
     (hovered?.kind === "vehicle" && hovered.item.id) || (selected?.kind === "vehicle" && selected.item.id) || null;
   const activeNode =
     (hovered?.kind === "node" && hovered.item.id) || (selected?.kind === "node" && selected.item.id) || null;
+
+  // Selecting a vehicle on live traffic puts the map in "pick a destination" mode.
+  const selectedVehicle =
+    selected?.kind === "vehicle" ? (vehiclesById.get(selected.item.id) ?? selected.item) : null;
+  const picking = live && selectedVehicle !== null;
+
+  const remaining = useMemo(() => {
+    if (!selectedVehicle) return null;
+    const fresh = justRouted?.id === selectedVehicle.id && performance.now() - justRouted.at < 3000;
+    // Until the poll catches up with the new route, draw the one the backend returned.
+    if (fresh && selectedVehicle.route.join() !== justRouted.route.join()) return routeRemaining(justRouted.route, 0);
+    return routeRemaining(selectedVehicle.route, selectedVehicle.progress);
+  }, [selectedVehicle, justRouted]);
+
+  useEffect(() => {
+    if (!picking) setPickHover(null);
+  }, [picking]);
+
+  async function routeTo(dest: DestinationHover, vehicle: VehicleInfo | null = selectedVehicle) {
+    if (!vehicle || pending) return;
+    setPending(true);
+    try {
+      const updated = await sendRoute(vehicle.kind, vehicle.id, dest.id);
+      setJustRouted({ id: vehicle.id, route: updated.route, at: performance.now() });
+      toast.success(`${vehicle.label} cleared to ${dest.label}`);
+    } catch (caught) {
+      toast.error(`${vehicle.label}: ${caught instanceof Error ? caught.message : "route refused"}`);
+    } finally {
+      setPending(false);
+    }
+  }
 
   const zoomBy = useCallback((factor: number) => {
     setView((v) => zoomAround(v, v.x + v.w / 2, v.y + v.h / 2, factor));
@@ -306,11 +369,40 @@ export function GroundChart({ className, state }: { className?: string; state: S
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (e.button !== 0) return;
+    // On live traffic, pressing on a truck grabs it (drag it where it should drive)
+    // instead of panning the map.
+    const hit = live ? lookup(e.target as Element, vehiclesById) : null;
+    if (hit?.kind === "vehicle" && hit.item.kind === "truck") {
+      truckDrag.current = { vehicle: hit.item, startX: e.clientX, startY: e.clientY, moved: false };
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
     drag.current = { startX: e.clientX, startY: e.clientY, view, moved: false };
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
     const box = e.currentTarget.getBoundingClientRect();
+
+    const td = truckDrag.current;
+    if (td) {
+      if (!td.moved && Math.hypot(e.clientX - td.startX, e.clientY - td.startY) > DRAG_THRESHOLD_PX) {
+        td.moved = true;
+        setSelected({ kind: "vehicle", item: td.vehicle });
+        setHovered(null);
+      }
+      if (td.moved) {
+        const p = toChart(view, box, e.clientX, e.clientY);
+        const v = vehiclesById.get(td.vehicle.id) ?? td.vehicle;
+        const from = routePoint(v.route, v.progress, v.position);
+        setGhost(from ? [[from.x, from.y], [p.x, p.y]] : null);
+        const target = nearestDestination("truck", p.x, p.y, 40 / p.scale);
+        if (target?.id !== pickHover?.id) {
+          setPickHover(target && { ...target, label: destinationLabel("truck", target.id) });
+        }
+      }
+      return;
+    }
+
     const d = drag.current;
 
     if (d) {
@@ -340,9 +432,33 @@ export function GroundChart({ className, state }: { className?: string; state: S
     }
     const next = lookup(e.target as Element, vehiclesById);
     if (keyOf(next) !== hoveredKey) setHovered(next);
+
+    // Picking a destination: snap to the nearest node this vehicle may be sent to.
+    if (picking && selectedVehicle) {
+      const p = toChart(view, box, e.clientX, e.clientY);
+      const target =
+        next?.kind === "vehicle" ? null : nearestDestination(selectedVehicle.kind, p.x, p.y, 40 / p.scale);
+      if (target?.id !== pickHover?.id) {
+        setPickHover(target && { ...target, label: destinationLabel(selectedVehicle.kind, target.id) });
+      }
+    }
   }
 
   function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    const td = truckDrag.current;
+    if (td) {
+      truckDrag.current = null;
+      setGhost(null);
+      if (!td.moved) {
+        // A plain click on a truck selects it, like any vehicle.
+        const key = `vehicle:${td.vehicle.id}`;
+        setSelected(key === selectedKey ? null : { kind: "vehicle", item: td.vehicle });
+      } else if (pickHover) {
+        void routeTo(pickHover, vehiclesById.get(td.vehicle.id) ?? td.vehicle);
+      }
+      return;
+    }
+
     const d = drag.current;
     drag.current = null;
     if (!d) return;
@@ -352,6 +468,11 @@ export function GroundChart({ className, state }: { className?: string; state: S
     }
     // A click without dragging: select what's under the cursor, or clear on empty map.
     const target = lookup(document.elementFromPoint(e.clientX, e.clientY), vehiclesById);
+    if (picking && target?.kind !== "vehicle") {
+      // In pick mode a click on the map is the destination, not a selection.
+      if (pickHover) void routeTo(pickHover);
+      return;
+    }
     setSelected(target && keyOf(target) === selectedKey ? null : target);
   }
 
@@ -367,7 +488,11 @@ export function GroundChart({ className, state }: { className?: string; state: S
   return (
     <div
       ref={containerRef}
-      className={cn("relative touch-none overflow-hidden select-none", dragging ? "cursor-grabbing" : "cursor-grab", className)}
+      className={cn(
+        "relative touch-none overflow-hidden select-none",
+        dragging ? "cursor-grabbing" : picking ? "cursor-crosshair" : "cursor-grab",
+        className,
+      )}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -390,6 +515,8 @@ export function GroundChart({ className, state }: { className?: string; state: S
           selectedTaxiway={selectedTaxiway}
           tier={tier}
         />
+        <WarningLayer warnings={warnings} />
+        <RouteLayer remaining={remaining} pickHover={pickHover} pending={pending} ghost={ghost} />
         <VehicleLayer vehicles={vehicles} activeId={activeVehicle} />
       </svg>
 
@@ -408,7 +535,7 @@ export function GroundChart({ className, state }: { className?: string; state: S
 
       {panel && (
         <Card
-          className="absolute top-4 right-16 z-10 w-80 gap-0 border-border bg-scrim py-4 backdrop-blur-md"
+          className="absolute top-16 right-16 z-10 w-80 gap-0 border-border bg-scrim py-4 backdrop-blur-md"
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}
         >
@@ -421,6 +548,22 @@ export function GroundChart({ className, state }: { className?: string; state: S
             </div>
             <CardTitle className="font-mono text-lg">{panel.title}</CardTitle>
             <CardDescription>{panel.body}</CardDescription>
+            {selectedVehicle && (
+              <p
+                className={cn(
+                  "mt-2 rounded-md border px-3 py-2 text-xs",
+                  live ? "border-beacon/40 text-foreground" : "border-border text-muted-foreground",
+                )}
+              >
+                {!live
+                  ? "Routing needs the live backend. Demo traffic can't take clearances."
+                  : pending
+                    ? "Planning route…"
+                    : selectedVehicle.kind === "truck"
+                      ? `Drag ${selectedVehicle.label} where it should drive, or click the map. Esc to cancel.`
+                      : `Click the map where ${selectedVehicle.label} should go. Esc to cancel.`}
+              </p>
+            )}
             {selectedTaxiway && (
               <p className="pt-2 font-mono text-xs text-muted-foreground">
                 {selectedNodes.filter((n) => n.kind === "hold").length} hold-short points ·{" "}

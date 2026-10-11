@@ -100,6 +100,54 @@ export function routePoint(route: string[], progress: number, fallback?: string)
   return null;
 }
 
+/** The part of a route still ahead of the vehicle: from where it is now to the end. */
+export function routeRemaining(route: string[], progress: number): Point[] {
+  const pts = routeLine(route);
+  if (pts.length < 2) return pts;
+  let remaining = Math.min(Math.max(progress, 0), 1) * lineLength(pts);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const [ax, ay] = pts[i];
+    const [bx, by] = pts[i + 1];
+    const len = Math.hypot(bx - ax, by - ay);
+    if (remaining <= len) {
+      const t = len ? remaining / len : 0;
+      return [[ax + (bx - ax) * t, ay + (by - ay) * t], ...pts.slice(i + 1)];
+    }
+    remaining -= len;
+  }
+  return [pts[pts.length - 1]];
+}
+
+export type VehicleKind = "plane" | "truck";
+
+// The backend planner routes planes on the taxiway graph (no runway crossings or runway
+// ends), plus a runway end as "taxi out and take off". Trucks may go to any ground node.
+const destinationSets: Record<VehicleKind, string[]> = {
+  plane: Object.keys(chart.positions).filter((id) => !id.startsWith("x_")),
+  truck: Object.keys(chart.positions),
+};
+
+/** Nearest node a vehicle of this kind can be sent to, within maxDist chart units. */
+export function nearestDestination(kind: VehicleKind, x: number, y: number, maxDist: number) {
+  let best: { id: string; x: number; y: number } | null = null;
+  let bestD = maxDist;
+  for (const id of destinationSets[kind]) {
+    const [px, py] = chart.positions[id];
+    const d = Math.hypot(px - x, py - y);
+    if (d < bestD) {
+      bestD = d;
+      best = { id, x: px, y: py };
+    }
+  }
+  return best;
+}
+
+/** How a destination reads in the UI: "runway 22R (takeoff)" or "taxiway B". */
+export function destinationLabel(kind: VehicleKind, id: string) {
+  if (id.startsWith("rwy_")) return kind === "plane" ? `runway ${id.slice(4)} (takeoff)` : `runway ${id.slice(4)} end`;
+  return placeName(id);
+}
+
 const nodeInfo = new Map(chart.nodes.map((n) => [n.id, n]));
 
 /**

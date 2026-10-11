@@ -5,5 +5,6 @@ export default [
   route("app", "routes/app.tsx"),
   route("drowsiness", "routes/drowsiness.tsx"),
   route("drowsiness/voice-alert", "routes/drowsiness-voice-alert.ts"),
+  route("alerts/voice", "routes/alerts-voice.ts"),
   route("sim", "routes/sim.tsx"),
 ] satisfies RouteConfig;

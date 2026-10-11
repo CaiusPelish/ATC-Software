@@ -22,6 +22,7 @@ export type GroundVehicle = {
   route: string[];
   speed: number;
   progress: number;
+  status?: "waiting" | "taxiing" | "holding";
 };
 
 export type Conflict = {
@@ -30,12 +31,24 @@ export type Conflict = {
   severity: "warning" | "critical";
 };
 
+/** A collision the backend predicts: a vehicle's route meets someone within LOOKAHEAD (30 s). */
+export type CollisionWarning = {
+  /** [the vehicle, the aircraft or vehicle it will meet] */
+  aircraft_ids: string[];
+  /** Node where they'll meet. */
+  location: string;
+  /** Seconds until they're within 40 m. */
+  eta: number;
+};
+
 export type SimulationState = {
   time: number;
   running: boolean;
   aircraft: Aircraft[];
   vehicles: GroundVehicle[];
   conflicts: Conflict[];
+  /** Predicted collisions (newer backends only). */
+  warnings?: CollisionWarning[];
   score: number;
 };
 
