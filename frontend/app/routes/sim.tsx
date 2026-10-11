@@ -1,13 +1,15 @@
 import { Link } from "react-router";
-import { ArrowLeft, Eye } from "lucide-react";
+import { ArrowLeft, Eye, Flame } from "lucide-react";
 
 import type { Route } from "./+types/sim";
+import { CrashChallenge } from "~/components/crash-challenge";
 import { DrowsinessMonitorDock } from "~/components/drowsiness-monitor-dock";
 import { GroundChart } from "~/components/ground-chart";
 import { LoadingScreen } from "~/components/loading-screen";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card, CardContent } from "~/components/ui/card";
+import { useCrashChallenge } from "~/hooks/use-crash-challenge";
 import { useSimState, type SimSource } from "~/hooks/use-sim-state";
 import { cn } from "~/lib/utils";
 
@@ -36,11 +38,13 @@ const sourceKey = (s: SimSource) => (s.mode === "demo" ? s.reason : s.mode);
 
 export default function Sim() {
   const { state, source } = useSimState();
+  const challenge = useCrashChallenge(state);
+  const live = source.mode === "live";
   const label = sourceLabel[sourceKey(source)];
 
   return (
     <main className="relative h-svh overflow-hidden bg-background">
-      <GroundChart className="absolute inset-0" state={state} live={source.mode === "live"} />
+      <GroundChart className="absolute inset-0" state={state} live={live} />
 
       <header className="pointer-events-none absolute inset-x-0 top-0 flex flex-wrap items-center gap-2 p-4 pr-16 sm:gap-3">
         <Button asChild variant="outline" size="icon" className="pointer-events-auto bg-scrim backdrop-blur">
@@ -63,9 +67,19 @@ export default function Sim() {
           {label.text}
         </Badge>
         <Button
+          variant="outline"
+          className="pointer-events-auto ml-auto gap-2 border-destructive/50 bg-scrim px-3 backdrop-blur"
+          disabled={!live || challenge.phase !== "idle"}
+          title={live ? "Try to cause a runway incursion" : "Needs the live backend"}
+          onClick={challenge.open}
+        >
+          <Flame className="text-destructive" />
+          <span className="hidden sm:inline">Crash challenge</span>
+        </Button>
+        <Button
           asChild
           variant="outline"
-          className="pointer-events-auto ml-auto gap-2 bg-scrim px-3 backdrop-blur"
+          className="pointer-events-auto gap-2 bg-scrim px-3 backdrop-blur"
         >
           <Link to="/drowsiness">
             <Eye />
@@ -76,6 +90,8 @@ export default function Sim() {
       </header>
 
       <DrowsinessMonitorDock />
+
+      <CrashChallenge challenge={challenge} />
 
       <Card className="pointer-events-none absolute bottom-4 left-4 gap-0 border-border bg-scrim py-3 backdrop-blur-md">
         <CardContent className="flex flex-col gap-2 px-4">

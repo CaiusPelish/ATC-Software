@@ -22,6 +22,7 @@ export type GroundVehicle = {
   route: string[];
   speed: number;
   progress: number;
+  status?: "waiting" | "taxiing" | "holding";
 };
 
 export type Conflict = {

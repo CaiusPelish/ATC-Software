@@ -1,6 +1,6 @@
 // Controller actions sent to the backend (proxied by Vite to FastAPI).
 import type { VehicleKind } from "~/lib/chart";
-import type { Aircraft, GroundVehicle } from "~/lib/sim-state";
+import type { Aircraft, GroundVehicle, SimulationState } from "~/lib/sim-state";
 
 async function post<T>(path: string, body: unknown): Promise<T> {
   let res: Response;
@@ -30,4 +30,19 @@ export function sendRoute(kind: VehicleKind, id: string, destination: string) {
       ? `/api/aircraft/${encodeURIComponent(id)}/route`
       : `/api/vehicles/${encodeURIComponent(id)}/route`;
   return post<Aircraft | GroundVehicle>(path, { destination });
+}
+
+/** Replace the running simulation with a scenario ("default", "empty", "challenge_01"). */
+export function loadScenario(id: string) {
+  return post<SimulationState>("/api/scenario/load", { scenario_id: id });
+}
+
+/** Route an aircraft to the destination it already has (e.g. a parked arrival to its ramp). */
+export function assignRoute(aircraftId: string) {
+  return post<{ route: string[]; status: string }>(`/api/aircraft/${encodeURIComponent(aircraftId)}/assign-route`, {});
+}
+
+/** Tell a ground vehicle to stop where it is (hold short) or carry on. */
+export function holdVehicle(id: string, hold: boolean) {
+  return post<GroundVehicle>(`/api/vehicles/${encodeURIComponent(id)}/hold`, { hold });
 }

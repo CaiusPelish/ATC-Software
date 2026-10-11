@@ -16,10 +16,13 @@ export const RouteLayer = memo(function RouteLayer({
   remaining,
   pickHover,
   pending,
+  ghost = null,
 }: {
   remaining: Point[] | null;
   pickHover: DestinationHover | null;
   pending: boolean;
+  /** While a truck is being dragged: from the truck to the cursor. */
+  ghost?: [Point, Point] | null;
 }) {
   const end = remaining && remaining.length > 1 ? remaining[remaining.length - 1] : null;
   const d = remaining && remaining.length > 1 ? "M" + remaining.map(([x, y]) => `${x} ${y}`).join("L") : null;
@@ -48,6 +51,17 @@ export const RouteLayer = memo(function RouteLayer({
           <circle r={14} className="fill-beacon/25 stroke-beacon" strokeWidth={2} />
           <circle r={5} className="fill-beacon" />
         </g>
+      )}
+
+      {ghost && (
+        <line
+          x1={ghost[0][0]} y1={ghost[0][1]} x2={ghost[1][0]} y2={ghost[1][1]}
+          strokeWidth={2.5}
+          strokeDasharray="6 6"
+          vectorEffect="non-scaling-stroke"
+          className="stroke-taxiway"
+          data-drag-ghost=""
+        />
       )}
 
       {pickHover && (

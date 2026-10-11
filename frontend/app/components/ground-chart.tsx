@@ -11,6 +11,7 @@ import {
   describe,
   destinationLabel,
   nearestDestination,
+  routePoint,
   routeRemaining,
   type HoverTarget,
   type Point,
@@ -274,6 +275,9 @@ export function GroundChart({
   const [pending, setPending] = useState(false);
   // The route the backend just sent back, shown until the next poll carries it.
   const [justRouted, setJustRouted] = useState<{ id: string; route: string[]; at: number } | null>(null);
+  // Dragging a truck: a dashed line from the truck to the cursor while choosing where it goes.
+  const [ghost, setGhost] = useState<[Point, Point] | null>(null);
+  const truckDrag = useRef<{ vehicle: VehicleInfo; startX: number; startY: number; moved: boolean } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -313,9 +317,8 @@ export function GroundChart({
     if (!picking) setPickHover(null);
   }, [picking]);
 
-  async function routeTo(dest: DestinationHover) {
-    if (!selectedVehicle || pending) return;
-    const vehicle = selectedVehicle;
+  async function routeTo(dest: DestinationHover, vehicle: VehicleInfo | null = selectedVehicle) {
+    if (!vehicle || pending) return;
     setPending(true);
     try {
       const updated = await sendRoute(vehicle.kind, vehicle.id, dest.id);
@@ -362,11 +365,40 @@ export function GroundChart({
 
   function handlePointerDown(e: React.PointerEvent<HTMLDivElement>) {
     if (e.button !== 0) return;
+    // On live traffic, pressing on a truck grabs it (drag it where it should drive)
+    // instead of panning the map.
+    const hit = live ? lookup(e.target as Element, vehiclesById) : null;
+    if (hit?.kind === "vehicle" && hit.item.kind === "truck") {
+      truckDrag.current = { vehicle: hit.item, startX: e.clientX, startY: e.clientY, moved: false };
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
     drag.current = { startX: e.clientX, startY: e.clientY, view, moved: false };
   }
 
   function handlePointerMove(e: React.PointerEvent<HTMLDivElement>) {
     const box = e.currentTarget.getBoundingClientRect();
+
+    const td = truckDrag.current;
+    if (td) {
+      if (!td.moved && Math.hypot(e.clientX - td.startX, e.clientY - td.startY) > DRAG_THRESHOLD_PX) {
+        td.moved = true;
+        setSelected({ kind: "vehicle", item: td.vehicle });
+        setHovered(null);
+      }
+      if (td.moved) {
+        const p = toChart(view, box, e.clientX, e.clientY);
+        const v = vehiclesById.get(td.vehicle.id) ?? td.vehicle;
+        const from = routePoint(v.route, v.progress, v.position);
+        setGhost(from ? [[from.x, from.y], [p.x, p.y]] : null);
+        const target = nearestDestination("truck", p.x, p.y, 40 / p.scale);
+        if (target?.id !== pickHover?.id) {
+          setPickHover(target && { ...target, label: destinationLabel("truck", target.id) });
+        }
+      }
+      return;
+    }
+
     const d = drag.current;
 
     if (d) {
@@ -409,6 +441,20 @@ export function GroundChart({
   }
 
   function handlePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    const td = truckDrag.current;
+    if (td) {
+      truckDrag.current = null;
+      setGhost(null);
+      if (!td.moved) {
+        // A plain click on a truck selects it, like any vehicle.
+        const key = `vehicle:${td.vehicle.id}`;
+        setSelected(key === selectedKey ? null : { kind: "vehicle", item: td.vehicle });
+      } else if (pickHover) {
+        void routeTo(pickHover, vehiclesById.get(td.vehicle.id) ?? td.vehicle);
+      }
+      return;
+    }
+
     const d = drag.current;
     drag.current = null;
     if (!d) return;
@@ -465,7 +511,7 @@ export function GroundChart({
           selectedTaxiway={selectedTaxiway}
           tier={tier}
         />
-        <RouteLayer remaining={remaining} pickHover={pickHover} pending={pending} />
+        <RouteLayer remaining={remaining} pickHover={pickHover} pending={pending} ghost={ghost} />
         <VehicleLayer vehicles={vehicles} activeId={activeVehicle} />
       </svg>
 
@@ -484,7 +530,7 @@ export function GroundChart({
 
       {panel && (
         <Card
-          className="absolute top-4 right-16 z-10 w-80 gap-0 border-border bg-scrim py-4 backdrop-blur-md"
+          className="absolute top-16 right-16 z-10 w-80 gap-0 border-border bg-scrim py-4 backdrop-blur-md"
           onPointerDown={(e) => e.stopPropagation()}
           onPointerUp={(e) => e.stopPropagation()}
         >
@@ -508,7 +554,9 @@ export function GroundChart({
                   ? "Routing needs the live backend. Demo traffic can't take clearances."
                   : pending
                     ? "Planning route…"
-                    : `Click the map where ${selectedVehicle.label} should go. Esc to cancel.`}
+                    : selectedVehicle.kind === "truck"
+                      ? `Drag ${selectedVehicle.label} where it should drive, or click the map. Esc to cancel.`
+                      : `Click the map where ${selectedVehicle.label} should go. Esc to cancel.`}
               </p>
             )}
             {selectedTaxiway && (
