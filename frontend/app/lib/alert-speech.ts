@@ -120,7 +120,7 @@ export function describeWarning(warning: CollisionWarning, state: SimulationStat
     title: "Conflict in path",
     text: `${a} will meet ${b} on ${place} in ${seconds} s.`,
     spoken: speakable(
-      `Traffic alert. ${speakCallsign(a)}, conflict with ${speakCallsign(b)}, ${speakPlace(place)}, in ${spellDigits(String(seconds))} seconds. Hold position.`,
+      `Traffic alert. ${speakCallsign(a)}, conflict with ${speakCallsign(b)}, ${speakPlace(place)}, in ${seconds} seconds. Hold position.`,
     ),
   };
 }
