@@ -4,7 +4,8 @@ import { toast } from "sonner";
 
 import { Button } from "~/components/ui/button";
 import { Card, CardDescription, CardHeader, CardTitle } from "~/components/ui/card";
-import { RouteLayer, WarningLayer, type DestinationHover, type PredictedMeeting } from "~/components/route-layer";
+import { InboundLayer, RouteLayer, WarningLayer, type DestinationHover, type PredictedMeeting } from "~/components/route-layer";
+import type { Inbound } from "~/hooks/use-crash-challenge";
 import { VehicleLayer } from "~/components/vehicle-layer";
 import {
   chart,
@@ -263,11 +264,14 @@ export function GroundChart({
   state,
   live = false,
   warnings = NO_WARNINGS,
+  inbound = null,
 }: {
   className?: string;
   state: SimulationState | null;
   /** Predicted meeting points to mark on the map. */
   warnings?: PredictedMeeting[];
+  /** Crash challenge: the landing arrival on final approach. */
+  inbound?: Inbound | null;
   /** Live backend traffic. Routing only works then; demo traffic can't take clearances. */
   live?: boolean;
 }) {
@@ -517,6 +521,7 @@ export function GroundChart({
         />
         <WarningLayer warnings={warnings} />
         <RouteLayer remaining={remaining} pickHover={pickHover} pending={pending} ghost={ghost} />
+        <InboundLayer inbound={inbound} />
         <VehicleLayer vehicles={vehicles} activeId={activeVehicle} />
       </svg>
 

@@ -1,4 +1,5 @@
 import { memo } from "react";
+import { Plane } from "lucide-react";
 
 import { chart, type Point } from "~/lib/chart";
 import { cn } from "~/lib/utils";
@@ -106,6 +107,50 @@ export const WarningLayer = memo(function WarningLayer({ warnings }: { warnings:
           </g>
         );
       })}
+    </g>
+  );
+});
+
+type InboundPlane = {
+  x: number;
+  y: number;
+  heading: number;
+  label: string;
+  closed: boolean;
+  threshold: [number, number];
+};
+
+/** The landing arrival on final approach (crash challenge), drawn before the backend has it. */
+export const InboundLayer = memo(function InboundLayer({ inbound }: { inbound: InboundPlane | null }) {
+  if (!inbound) return null;
+  const [tx, ty] = inbound.threshold;
+  const tone = inbound.closed ? "destructive" : "foreground";
+  return (
+    <g className="pointer-events-none" data-inbound={inbound.closed ? "closed" : "open"}>
+      <line
+        x1={inbound.x} y1={inbound.y} x2={tx} y2={ty}
+        strokeWidth={2}
+        strokeDasharray="4 10"
+        vectorEffect="non-scaling-stroke"
+        className={inbound.closed ? "stroke-destructive/70" : "stroke-foreground/40"}
+      />
+      {/* Glides between 500 ms polls instead of jumping ~36 m each time */}
+      <g style={{ ...pinned(inbound.x, inbound.y), transition: "transform 500ms linear" }} data-inbound-x={inbound.x.toFixed(0)} data-inbound-y={inbound.y.toFixed(0)}>
+        <circle r={48} className={cn("fill-none", inbound.closed ? "stroke-destructive motion-safe:animate-pulse" : "stroke-foreground/50")} strokeWidth={2.5} />
+        <g style={{ transform: `rotate(${inbound.heading - 45}deg)` }}>
+          <Plane x={-34} y={-34} width={68} height={68} fill="currentColor" strokeWidth={1} className={cn(tone === "destructive" ? "text-destructive" : "text-foreground", "stroke-background")} />
+        </g>
+        <text
+          x={58}
+          y={-34}
+          className={cn(
+            "font-mono text-[32px] font-bold [paint-order:stroke] stroke-background [stroke-linejoin:round] [stroke-width:7px]",
+            inbound.closed ? "fill-destructive" : "fill-foreground",
+          )}
+        >
+          {inbound.label}
+        </text>
+      </g>
     </g>
   );
 });

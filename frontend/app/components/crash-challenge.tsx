@@ -50,7 +50,7 @@ export function CrashChallenge({ challenge }: { challenge: Challenge }) {
 
   return (
     <div
-      className="pointer-events-none absolute top-16 left-1/2 z-20 flex w-[min(34rem,calc(100%-2rem))] -translate-x-1/2 flex-col gap-2"
+      className="pointer-events-none absolute bottom-4 left-1/2 z-20 flex w-[min(34rem,calc(100%-2rem))] -translate-x-1/2 flex-col-reverse gap-2"
       data-challenge={phase}
     >
       {/* Live HUD: always visible while the challenge runs */}
