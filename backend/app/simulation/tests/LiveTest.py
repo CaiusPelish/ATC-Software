@@ -166,6 +166,15 @@ class LiveSimTest(unittest.TestCase):
         self.assertEqual(after.route[0], node)
         self.assertAlmostEqual(after.dist(sim.now), d - before.cum[before.index(d)], places=6)
 
+    def test_challenge_01_is_quiet_until_the_truck_moves(self):
+        """Routing the parked arrival to its ramp and doing nothing else raises no alarm."""
+        sim = load_scenario("challenge_01")
+        first = next(a for a in sim.state.aircraft if a.status == "waiting")
+        sim.route(first.id, first.destination)
+        seen = []
+        run(sim, 120, lambda sim, k: seen.extend(sim.state.conflicts + sim.state.warnings))
+        self.assertEqual(seen, [])
+
     def test_truck_routed_into_aircraft_path_is_predicted(self):
         """Driving a truck onto where a taxiing aircraft is going warns before they get close."""
         sim = LiveSim(auto_spawn=False, seed=0)
